@@ -1,0 +1,1 @@
+/home/g/Documentos/projects-espelho/pi/packages/coding-agent/examples/extensions/subagent/prompts/implement.md

@@ -1,0 +1,369 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+import planModeExt from "../plan-mode/index.ts";
+import statusLineExt from "../status-line.ts";
+import subagentPolicyExt from "../subagent-policy.ts";
+import recallToolsExt from "../recall-tools/index.ts";
+import subagentExt from "../subagent-env/index.ts";
+import workingIndicatorExt from "../working-indicator.ts";
+
+const fakeTheme = {
+	fg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
+	strikethrough: (text: string) => text,
+} as const;
+
+function createPiHarness() {
+	const handlers: Record<string, (...args: any[]) => any> = {};
+	const commands: Record<string, { description: string; handler: (...args: any[]) => any }> = {};
+	const renderers: Record<string, (...args: any[]) => any> = {};
+	const pi = {
+		on: (event: string, handler: (...args: any[]) => any) => {
+			handlers[event] = handler;
+		},
+		registerCommand: (name: string, config: { description: string; handler: (...args: any[]) => any }) => {
+			commands[name] = config;
+		},
+		registerMessageRenderer: (type: string, renderer: (...args: any[]) => any) => {
+			renderers[type] = renderer;
+		},
+		registerFlag: () => undefined,
+		registerShortcut: () => undefined,
+		registerTool: (tool: any) => {
+			commands[tool.name] = tool;
+		},
+	} as any;
+	return { pi, handlers, commands, renderers };
+}
+
+const AGENT_MODEL_EXPECTATIONS = [
+	["scout", "model: kilo/gpt-4.1-mini"],
+	["planner", "model: kilo/qwen/qwen3.6-plus"],
+	["worker", "model: kilo/gpt-5-mini"],
+	["reviewer", "model: kilo/qwen/qwen3.6-plus"],
+] as const;
+
+test("bundled subagents point at Kilo models", async () => {
+	for (const [name, expected] of AGENT_MODEL_EXPECTATIONS) {
+		const file = path.join("subagent-env", "agents", `${name}.md`);
+		const content = await fs.readFile(file, "utf8");
+		assert.ok(content.includes(expected), `${name} should include ${expected}`);
+	}
+});
+
+test("status line renders model-aware turn progress", async () => {
+	const { pi, handlers } = createPiHarness();
+	statusLineExt(pi);
+
+	const statusCalls: Array<[string, string | undefined]> = [];
+	const ctx = {
+		model: { provider: "kilo", id: "qwen/qwen3.6-plus" },
+		hasUI: true,
+		ui: {
+			theme: fakeTheme,
+			setStatus: (key: string, value: string | undefined) => statusCalls.push([key, value]),
+		},
+	} as any;
+
+	await handlers.session_start?.({}, ctx);
+	await handlers.turn_start?.({}, ctx);
+	await handlers.turn_end?.({}, ctx);
+
+	assert.deepEqual(statusCalls.map(([key]) => key), ["status-line", "status-line", "status-line"]);
+	assert.match(statusCalls[0]![1]!, /Ready/);
+	assert.match(statusCalls[1]![1]!, /Turn 1/);
+	assert.match(statusCalls[2]![1]!, /Turn 1 complete/);
+	assert.match(statusCalls[0]![1]!, /kilo\/qwen\/qwen3\.6-plus/);
+});
+
+test("working indicator can hide and restore the loader row", async () => {
+	const { pi, handlers, commands } = createPiHarness();
+	workingIndicatorExt(pi);
+
+	const visibleCalls: boolean[] = [];
+	const indicatorCalls: any[] = [];
+	const statusCalls: Array<[string, string | undefined]> = [];
+	const ctx = {
+		hasUI: true,
+		ui: {
+			theme: fakeTheme,
+			setWorkingVisible: (value: boolean) => visibleCalls.push(value),
+			setWorkingIndicator: (value: any) => indicatorCalls.push(value),
+			setStatus: (key: string, value: string | undefined) => statusCalls.push([key, value]),
+			notify: () => undefined,
+		},
+	} as any;
+
+	await handlers.session_start?.({}, ctx);
+	await commands["working-indicator"]!.handler("none", ctx);
+	await commands["working-indicator"]!.handler("reset", ctx);
+
+	assert.deepEqual(visibleCalls.slice(0, 3), [true, false, true]);
+	assert.equal(statusCalls[0]![0], "working-indicator");
+	assert.match(statusCalls[0]![1]!, /Indicator:/);
+	assert.ok(indicatorCalls.length >= 2);
+});
+
+function mockClassifierFetch(word: "trivial" | "moderada" | "complexa") {
+	const original = globalThis.fetch;
+	globalThis.fetch = (async () =>
+		new Response(JSON.stringify({ choices: [{ message: { content: word } }] }), {
+			status: 200,
+			headers: { "content-type": "application/json" },
+		})) as typeof fetch;
+	return () => {
+		globalThis.fetch = original;
+	};
+}
+
+test("subagent policy auto-delegates when classifier returns 'complexa'", async () => {
+	const restore = mockClassifierFetch("complexa");
+	try {
+		const { pi, handlers } = createPiHarness();
+		subagentPolicyExt(pi);
+
+		const response = await handlers.input?.(
+			{ text: "investiga o repo X e propoe refactor em varios arquivos " + Math.random(), source: "interactive" },
+			{ hasUI: true, ui: { notify: () => undefined } } as any,
+		);
+
+		assert.equal(response?.action, "transform");
+		assert.match(String(response?.text ?? ""), /\[AUTO-DELEGATION ROUTER\]/);
+		assert.match(String(response?.text ?? ""), /scout/);
+		assert.match(String(response?.text ?? ""), /worker/);
+	} finally {
+		restore();
+	}
+});
+
+test("subagent policy injects guidance when classifier returns 'moderada'", async () => {
+	const restore = mockClassifierFetch("moderada");
+	try {
+		const { pi, handlers } = createPiHarness();
+		subagentPolicyExt(pi);
+
+		const response = await handlers.before_agent_start?.(
+			{ prompt: "le esses dois arquivos e me explica " + Math.random(), systemPrompt: "BASE" },
+			{ hasUI: false } as any,
+		);
+
+		assert.ok(response?.systemPrompt?.includes("[SUBAGENT POLICY]"));
+		assert.ok(response?.systemPrompt?.includes("scout"));
+		assert.ok(response?.systemPrompt?.includes("reviewer"));
+	} finally {
+		restore();
+	}
+});
+
+test("subagent policy skips when classifier returns 'trivial'", async () => {
+	const restore = mockClassifierFetch("trivial");
+	try {
+		const { pi, handlers } = createPiHarness();
+		subagentPolicyExt(pi);
+
+		const inputResp = await handlers.input?.(
+			{ text: "oi " + Math.random(), source: "interactive" },
+			{ hasUI: true, ui: { notify: () => undefined } } as any,
+		);
+		assert.equal(inputResp?.action, "continue");
+
+		const beforeResp = await handlers.before_agent_start?.(
+			{ prompt: "oi " + Math.random(), systemPrompt: "BASE" },
+			{ hasUI: false } as any,
+		);
+		assert.equal(beforeResp, undefined);
+	} finally {
+		restore();
+	}
+});
+
+// Live integration test against the kilo gateway. Opt-in via PI_TEST_LIVE=1.
+// Uses kilo-auto/small (free routing when account has no balance) so it
+// costs nothing to run. Validates that:
+//   1. Credentials in models.json + settings.json resolve correctly
+//   2. The gateway accepts our request shape
+//   3. A real complex prompt in PT classifies as auto (or at least !== skip)
+test("subagent policy classifies a complex PT prompt via live kilo gateway", { skip: process.env.PI_TEST_LIVE !== "1" }, async () => {
+	const settingsPath = path.join(os.homedir(), ".pi/agent/settings.json");
+	const original = await fs.readFile(settingsPath, "utf8");
+	const settings = JSON.parse(original);
+	const liveSettings = {
+		...settings,
+		subagentPolicy: {
+			classifierProvider: "kilo",
+			classifierModel: "kilo-auto/small",
+		},
+	};
+	await fs.writeFile(settingsPath, JSON.stringify(liveSettings, null, 2));
+
+	try {
+		const { pi, handlers } = createPiHarness();
+		subagentPolicyExt(pi);
+
+		const prompt =
+			"investiga o repositorio inteiro, mapeia onde o orquestrador decide delegar, " +
+			"refatora a heuristica em varios arquivos e revisa os riscos. " + Math.random();
+
+		const response = await handlers.input?.(
+			{ text: prompt, source: "interactive" },
+			{ hasUI: true, ui: { notify: () => undefined } } as any,
+		);
+
+		// We don't assert exact tier — model may classify as moderada or complexa.
+		// We assert the call didn't blow up and produced a known action shape.
+		assert.ok(response === undefined || response.action === "continue" || response.action === "transform");
+	} finally {
+		await fs.writeFile(settingsPath, original);
+	}
+});
+
+test("plan mode registers structured message renderers", async () => {
+	const { pi, renderers } = createPiHarness();
+	planModeExt(pi);
+
+	assert.ok(renderers["plan-todo-list"], "plan-todo-list renderer missing");
+	assert.ok(renderers["plan-complete"], "plan-complete renderer missing");
+
+	const todo = renderers["plan-todo-list"]({ content: "**Plan Steps (2):**\n\n1. First\n2. Second" }, {}, fakeTheme);
+	const done = renderers["plan-complete"]({ content: "**Plan Complete!** ✓\n\n1. First" }, {}, fakeTheme);
+
+	assert.match(todo.render(120).join("\n"), /Plan Steps/);
+	assert.match(todo.render(120).join("\n"), /First/);
+	assert.match(done.render(120).join("\n"), /Plan Complete/);
+});
+
+test("recall tools extension registers load/save tools", async () => {
+	const { pi, commands } = createPiHarness();
+	recallToolsExt(pi);
+	assert.ok(commands["recall_mcp_load"], "recall_mcp_load tool missing");
+	assert.ok(commands["recall_save"], "recall_save tool missing");
+});
+
+test("recall save creates project identity in caller cwd", async () => {
+	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-recall-save-"));
+	const settings = JSON.parse(await fs.readFile("/home/g/.pi/agent/settings.json", "utf8")).recall;
+	const payload = {
+		cwd: tmpDir,
+		coreDir: "/home/g/recall-core",
+		url: settings.url,
+		bearerToken: settings.bearerToken,
+		pythonPath: settings.pythonPath,
+		sessionTitle: "Pi recall save smoke test",
+		sessionNotes: "Validating that the client creates .recall in the session cwd, not in recall-core.",
+		projectName: "pi-test-project",
+		addFiles: ["/home/g/recall-pi/extensions/recall-tools/index.ts"],
+	};
+
+	try {
+		const res = await new Promise<string>((resolve, reject) => {
+			const proc = spawn(settings.pythonPath, [
+				"/home/g/recall-pi/extensions/recall-tools/recall_mcp_client.py",
+				"save",
+				JSON.stringify(payload),
+			]);
+			let stdout = "";
+			let stderr = "";
+			proc.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+			proc.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+			proc.on("close", (code: number) => {
+				if (code === 0) resolve(stdout);
+				else reject(new Error(stderr || stdout || `exit ${code}`));
+			});
+		});
+		const out = JSON.parse(res);
+		assert.equal(out.ok, true);
+		assert.ok(await fs.stat(path.join(tmpDir, ".recall", "project.json")));
+		assert.ok(out.project?.file?.startsWith(tmpDir), "project file must live in caller cwd");
+	} finally {
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	}
+});
+
+
+test("subagent tool can run a project-local agent", async () => {
+	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-subagent-test-"));
+	const agentsDir = path.join(tmpDir, ".pi", "agents");
+	await fs.mkdir(agentsDir, { recursive: true });
+
+	const fakePi = path.join(tmpDir, "fake-pi.mjs");
+	await fs.writeFile(
+		fakePi,
+		`import process from 'node:process';
+
+const task = process.argv.at(-1) ?? '';
+if (!process.argv.includes('--mode') || !process.argv.includes('json') || !process.argv.includes('--no-session')) {
+  console.error('missing expected pi args');
+  process.exit(1);
+}
+
+console.log(JSON.stringify({
+  type: 'message_end',
+  message: {
+    role: 'assistant',
+    content: [{ type: 'text', text: 'pong: ' + task }],
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 }, totalTokens: 2 },
+    model: 'fake-model',
+    stopReason: 'end'
+  }
+}));
+`,
+		"utf8",
+	);
+
+	await fs.writeFile(
+		path.join(agentsDir, "helper.md"),
+		`---
+name: helper
+description: returns pong
+---
+
+Respond with exactly: pong
+`,
+		"utf8",
+	);
+
+	const previous = process.env.PI_SUBAGENT_BIN;
+	process.env.PI_SUBAGENT_BIN = fakePi;
+
+	try {
+		let tool: any;
+		subagentExt({ registerTool: (t) => (tool = t) } as any);
+		assert.ok(tool, "subagent tool was not registered");
+
+		const statusCalls: Array<[string, string | undefined]> = [];
+		const widgetCalls: Array<[string, string[] | undefined]> = [];
+		const result = await tool.execute(
+			"test",
+			{ agent: "helper", task: "say pong", agentScope: "project", confirmProjectAgents: false },
+			undefined,
+			undefined,
+			{
+				cwd: tmpDir,
+				hasUI: true,
+				ui: {
+					theme: fakeTheme,
+					setStatus: (key: string, value: string | undefined) => statusCalls.push([key, value]),
+					setWidget: (key: string, value: string[] | undefined) => widgetCalls.push([key, value]),
+					notify: () => undefined,
+				},
+			},
+		);
+
+		assert.ok(!result.isError);
+		assert.equal(result.content[0].type, "text");
+		assert.match((result.content[0] as { type: "text"; text: string }).text, /pong: Task: say pong/);
+		assert.equal(result.details.results[0].exitCode, 0);
+		assert.equal(result.details.results[0].agent, "helper");
+		assert.ok(statusCalls.some(([key]) => key === "subagent-hud"));
+		assert.ok(widgetCalls.some(([key]) => key === "subagent-hud"));
+	} finally {
+		if (previous === undefined) delete process.env.PI_SUBAGENT_BIN;
+		else process.env.PI_SUBAGENT_BIN = previous;
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	}
+});

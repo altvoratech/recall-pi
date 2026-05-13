@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+extensions/node_modules/
+dist/
+build/
+
+# Logs (may contain session contents from recall hits — keep local only)
+**/logs/
+*.log
+extensions/recall-tools/logs/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local-only docs (session notes etc)
+SESSION-NOTES-*.md
+RECALL_CORE_ANALYSIS.md
