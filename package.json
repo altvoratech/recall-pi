@@ -1,0 +1,11 @@
+{
+  "name": "recall-pi",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "cd extensions && npm test",
+    "typecheck": "cd extensions && npm run typecheck",
+    "setup-pi-settings": "scripts/setup-pi-settings.sh"
+  }
+}

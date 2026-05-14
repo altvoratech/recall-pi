@@ -19,3 +19,4 @@ coverage/
 recall-tools/logs/
 SESSION-NOTES-*.md
 RECALL_CORE_ANALYSIS.md
+jina-index/_indexes/

@@ -19,3 +19,6 @@ extensions/recall-tools/logs/
 # Local-only docs (session notes etc)
 SESSION-NOTES-*.md
 RECALL_CORE_ANALYSIS.md
+
+# Compaction snapshots (runtime data, local cache)
+compact-session/

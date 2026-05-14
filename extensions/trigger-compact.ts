@@ -13,10 +13,12 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 const DEFAULT_THRESHOLD = 100_000;
 
+import { readGlobalSettings } from "./shared/settings.ts";
+
 function loadThreshold(): number {
 	try {
-		const settings = JSON.parse(readFileSync(join(homedir(), ".pi/agent/settings.json"), "utf8"));
-		const t = settings?.compaction?.thresholdTokens;
+		const settings = readGlobalSettings();
+		const t = (settings as any)?.compaction?.thresholdTokens;
 		if (typeof t === "number" && t > 0) return t;
 	} catch {
 		/* fallback */

@@ -74,9 +74,9 @@ recall-pi/
 │   ├── protected-paths.ts  # write/edit confirmation on .env, .git, etc
 │   ├── confirm-destructive.ts # confirm /new (clear session)
 │   ├── notify.ts           # native terminal notification on agent_end
-│   ├── working-indicator.ts# customizable spinner
-│   └── plan-mode/          # read-only plan mode (from upstream examples)
-├── agents/            # subagent overrides (planner.md, reviewer.md)
+│   └── working-indicator.ts# customizable spinner
+├── .pi/
+│   └── settings.json  # project-local Pi settings
 ├── prompts/           # slash command templates (/implement, etc)
 └── GLOBAL_RULES.md    # operator rules injected at prompt tail
 ```
@@ -89,30 +89,15 @@ recall-pi/
    cd ~/recall-pi/extensions && npm install
    ```
 
-2. Add to your `~/.pi/agent/settings.json`:
-   ```json
-   {
-     "extensions": ["/home/g/recall-pi/extensions"],
-     "prompts": ["/home/g/recall-pi/prompts"],
-     "systemRules": { "path": "/home/g/recall-pi/GLOBAL_RULES.md" },
-     "subagentPolicy": {
-       "classifierProvider": "kilo",
-       "classifierModel": "gpt-4.1-mini"
-     },
-     "compaction": {
-       "thresholdTokens": 100000,
-       "summarizerProvider": "google",
-       "summarizerModel": "gemini-2.5-flash"
-     }
-   }
-   ```
+2. O projeto já inclui `.pi/settings.json` com paths locais de `extensions/`, `prompts/` e `GLOBAL_RULES.md`.
 
-3. Symlink agents into Pi's expected path (Pi hardcodes `~/.pi/agent/agents`):
-   ```bash
-   ln -s /home/g/recall-pi/agents ~/.pi/agent/agents
-   ```
+3. Opcional: se quiser defaults globais, copie os mesmos campos para `~/.pi/agent/settings.json`.
 
-4. Restart Pi or run `/reload`.
+Setup helper:
+
+- scripts/setup-pi-settings.sh: copies the project .pi/settings.json to ~/.pi/agent/settings.json if the latter doesn't exist (runs with safe permissions). Run via `npm run setup-pi-settings` from repo root.
+
+4. Restart Pi ou rode `/reload`.
 
 ## Test
 

@@ -6,24 +6,24 @@
  *
  * Config em ~/.pi/agent/settings.json:
  *   "subagentPolicy": {
- *     "classifierProvider": "kilo",
- *     "classifierModel": "gpt-4.1-mini"
+ *     "classifierProvider": "opencode-go",
+ *     "classifierModel": "qwen3.6-plus"
  *   }
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type AgentConfig, discoverAgents } from "./subagent-env/agents.ts";
+import { readGlobalSettings } from "./shared/settings.ts";
 
 type Tier = "skip" | "inject" | "auto";
 
 const SETTINGS_PATH = join(homedir(), ".pi/agent/settings.json");
-const MODELS_PATH = join(homedir(), ".pi/agent/models.json");
 
-const DEFAULT_PROVIDER = "kilo";
-const DEFAULT_MODEL = "gpt-4.1-mini";
+const DEFAULT_PROVIDER = "opencode-go";
+const DEFAULT_MODEL = "qwen3.6-plus";
 const CLASSIFIER_TIMEOUT_MS = 2500;
 const CACHE_TTL_MS = 5 * 60_000;
 
@@ -36,12 +36,6 @@ const CLASSIFIER_SYSTEM = [
 	"- complexa: cross-layer, multi-arquivo, investigação ampla, refactor, design, audit.",
 ].join("\n");
 
-interface ProviderCreds {
-	baseUrl: string;
-	apiKey: string;
-	model: string;
-}
-
 function readJson<T>(path: string): T | null {
 	try {
 		return JSON.parse(readFileSync(path, "utf8")) as T;
@@ -50,28 +44,62 @@ function readJson<T>(path: string): T | null {
 	}
 }
 
-function resolveClassifier(): ProviderCreds | null {
-	const settings = readJson<any>(SETTINGS_PATH) ?? {};
-	const policy = settings.subagentPolicy ?? {};
-	const providerName: string = policy.classifierProvider ?? DEFAULT_PROVIDER;
-	const model: string = policy.classifierModel ?? DEFAULT_MODEL;
+function resolveProviderModel(): { provider: string; model: string } {
+	const settings = readGlobalSettings() ?? {};
+	const policy = (settings as any).subagentPolicy ?? {};
+	return {
+		provider: typeof policy.classifierProvider === "string" ? policy.classifierProvider : DEFAULT_PROVIDER,
+		model: typeof policy.classifierModel === "string" ? policy.classifierModel : DEFAULT_MODEL,
+	};
+}
 
+interface ProviderCreds {
+	baseUrl: string;
+	apiKey: string;
+	model: string;
+	extraHeaders?: Record<string, string>;
+}
+
+const MODELS_PATH = join(homedir(), ".pi/agent/models.json");
+
+async function resolveClassifierCreds(
+	providerName: string,
+	modelId: string,
+	ctx?: ExtensionContext,
+): Promise<ProviderCreds | null> {
+	// Caminho preferido: usar o modelRegistry do Pi (le auth.json + models.json + built-ins)
+	if (ctx?.modelRegistry) {
+		const model = ctx.modelRegistry.find(providerName, modelId);
+		if (model) {
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+			if (auth.ok !== false && auth.apiKey) {
+				const baseUrl = (model as any).baseUrl ?? (model as any).provider?.baseUrl;
+				if (baseUrl) {
+					return { baseUrl, apiKey: auth.apiKey, model: modelId, extraHeaders: auth.headers };
+				}
+			}
+		}
+	}
+	// Fallback: ler models.json direto (usado em testes / configs legadas)
 	const models = readJson<any>(MODELS_PATH);
 	const provider = models?.providers?.[providerName];
-	if (!provider?.baseUrl || !provider?.apiKey) return null;
-	return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, model };
+	if (provider?.baseUrl && provider?.apiKey) {
+		return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: modelId };
+	}
+	return null;
 }
 
 const cache = new Map<string, { tier: Tier; ts: number }>();
 
-async function classify(prompt: string): Promise<Tier> {
+async function classify(prompt: string, ctx?: ExtensionContext): Promise<Tier> {
 	const key = prompt.trim().slice(0, 500);
 	if (!key) return "skip";
 
 	const hit = cache.get(key);
 	if (hit && Date.now() - hit.ts < CACHE_TTL_MS) return hit.tier;
 
-	const creds = resolveClassifier();
+	const { provider, model: modelId } = resolveProviderModel();
+	const creds = await resolveClassifierCreds(provider, modelId, ctx);
 	if (!creds) return "inject"; // fallback conservador se config faltar
 
 	const ctl = new AbortController();
@@ -83,6 +111,7 @@ async function classify(prompt: string): Promise<Tier> {
 			headers: {
 				"content-type": "application/json",
 				authorization: `Bearer ${creds.apiKey}`,
+				...creds.extraHeaders,
 			},
 			signal: ctl.signal,
 			body: JSON.stringify({
@@ -172,7 +201,7 @@ export default function (pi: ExtensionAPI) {
 		const text = event.text?.trim() ?? "";
 		if (!text || text.startsWith("/")) return { action: "continue" };
 
-		const tier = await classify(text);
+		const tier = await classify(text, ctx);
 		if (tier !== "auto") return { action: "continue" };
 
 		const agents = discoverForPolicy(getCwd(ctx));
@@ -181,7 +210,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		const tier = await classify(event.prompt ?? "");
+		const tier = await classify(event.prompt ?? "", ctx);
 		if (tier === "skip") return undefined;
 
 		const agents = discoverForPolicy(getCwd(ctx));

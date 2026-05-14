@@ -26,11 +26,12 @@ const DEFAULT_PROTECTED: string[] = [
 	".pi/agent/models.json",
 ];
 
+import { readGlobalSettings } from "./shared/settings.ts";
+
 function loadExtraProtected(): string[] {
 	try {
-		const raw = readFileSync(join(homedir(), ".pi/agent/settings.json"), "utf8");
-		const settings = JSON.parse(raw);
-		const extras = settings?.protectedPaths;
+		const settings = readGlobalSettings();
+		const extras = (settings as any)?.protectedPaths;
 		if (Array.isArray(extras)) return extras.filter((p): p is string => typeof p === "string");
 	} catch {
 		/* fall through */

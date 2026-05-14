@@ -9,10 +9,24 @@
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -p tsconfig.json"
   },
-  "keywords": [],
+  "keywords": ["pi-package"],
   "author": "",
   "license": "ISC",
+  "pi": {
+    "extensions": [
+      "./*.ts",
+      "./subagent-env/index.ts",
+      "./recall-tools/index.ts",
+      "./command-bridge/index.ts",
+      "./compaction-snapshot/index.ts",
+      "./jina-index/index.ts",
+      "./tool-discovery/index.ts"
+    ]
+  },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.0"
+  },
+  "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.0"
   },
   "devDependencies": {

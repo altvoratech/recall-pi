@@ -1,0 +1,16 @@
+{
+  "extensions": ["../extensions"],
+  "prompts": ["../prompts"],
+  "systemRules": {
+    "path": "../GLOBAL_RULES.md"
+  },
+  "subagentPolicy": {
+    "classifierProvider": "kilo",
+    "classifierModel": "gpt-4.1-mini"
+  },
+  "compaction": {
+    "thresholdTokens": 100000,
+    "summarizerProvider": "opencode-go",
+    "summarizerModel": "deepseek-v4-pro"
+  }
+}

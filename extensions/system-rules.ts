@@ -25,8 +25,8 @@ const DEFAULT_PATH = join(homedir(), ".pi/agent/GLOBAL_RULES.md");
 
 function resolvePath(): string {
 	try {
-		const settings = JSON.parse(readFileSync(join(homedir(), ".pi/agent/settings.json"), "utf8"));
-		const p = settings?.systemRules?.path;
+		const settings = readGlobalSettings();
+		const p = (settings as any)?.systemRules?.path;
 		if (typeof p === "string" && p.length > 0) {
 			return p.startsWith("~") ? join(homedir(), p.slice(1)) : p;
 		}

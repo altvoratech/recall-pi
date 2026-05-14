@@ -5,12 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import planModeExt from "../plan-mode/index.ts";
 import statusLineExt from "../status-line.ts";
 import subagentPolicyExt from "../subagent-policy.ts";
 import recallToolsExt from "../recall-tools/index.ts";
 import subagentExt from "../subagent-env/index.ts";
 import workingIndicatorExt from "../working-indicator.ts";
+import jinaIndexExt from "../jina-index/index.ts";
+import { buildIndex, search } from "../tool-discovery/bm25.ts";
 
 const fakeTheme = {
 	fg: (_color: string, text: string) => text,
@@ -43,12 +44,12 @@ function createPiHarness() {
 
 const AGENT_MODEL_EXPECTATIONS = [
 	["scout", "model: kilo/gpt-4.1-mini"],
-	["planner", "model: kilo/qwen/qwen3.6-plus"],
+	["planner", "model: openai-codex/gpt-5.4"],
 	["worker", "model: kilo/gpt-5-mini"],
 	["reviewer", "model: kilo/qwen/qwen3.6-plus"],
 ] as const;
 
-test("bundled subagents point at Kilo models", async () => {
+test("bundled subagents match model declared in md", async () => {
 	for (const [name, expected] of AGENT_MODEL_EXPECTATIONS) {
 		const file = path.join("subagent-env", "agents", `${name}.md`);
 		const content = await fs.readFile(file, "utf8");
@@ -121,6 +122,16 @@ function mockClassifierFetch(word: "trivial" | "moderada" | "complexa") {
 	};
 }
 
+function mockClassifierCtx(extra: Record<string, unknown> = {}) {
+	return {
+		...extra,
+		modelRegistry: {
+			find: () => ({ baseUrl: "https://mock.classifier/api", provider: { baseUrl: "https://mock.classifier/api" } }),
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "mock-key", headers: {} }),
+		},
+	} as any;
+}
+
 test("subagent policy auto-delegates when classifier returns 'complexa'", async () => {
 	const restore = mockClassifierFetch("complexa");
 	try {
@@ -129,7 +140,7 @@ test("subagent policy auto-delegates when classifier returns 'complexa'", async 
 
 		const response = await handlers.input?.(
 			{ text: "investiga o repo X e propoe refactor em varios arquivos " + Math.random(), source: "interactive" },
-			{ hasUI: true, ui: { notify: () => undefined } } as any,
+			mockClassifierCtx({ hasUI: true, ui: { notify: () => undefined } }),
 		);
 
 		assert.equal(response?.action, "transform");
@@ -149,7 +160,7 @@ test("subagent policy injects guidance when classifier returns 'moderada'", asyn
 
 		const response = await handlers.before_agent_start?.(
 			{ prompt: "le esses dois arquivos e me explica " + Math.random(), systemPrompt: "BASE" },
-			{ hasUI: false } as any,
+			mockClassifierCtx({ hasUI: false }),
 		);
 
 		assert.ok(response?.systemPrompt?.includes("[SUBAGENT POLICY]"));
@@ -168,13 +179,13 @@ test("subagent policy skips when classifier returns 'trivial'", async () => {
 
 		const inputResp = await handlers.input?.(
 			{ text: "oi " + Math.random(), source: "interactive" },
-			{ hasUI: true, ui: { notify: () => undefined } } as any,
+			mockClassifierCtx({ hasUI: true, ui: { notify: () => undefined } }),
 		);
 		assert.equal(inputResp?.action, "continue");
 
 		const beforeResp = await handlers.before_agent_start?.(
 			{ prompt: "oi " + Math.random(), systemPrompt: "BASE" },
-			{ hasUI: false } as any,
+			mockClassifierCtx({ hasUI: false }),
 		);
 		assert.equal(beforeResp, undefined);
 	} finally {
@@ -222,26 +233,19 @@ test("subagent policy classifies a complex PT prompt via live kilo gateway", { s
 	}
 });
 
-test("plan mode registers structured message renderers", async () => {
-	const { pi, renderers } = createPiHarness();
-	planModeExt(pi);
-
-	assert.ok(renderers["plan-todo-list"], "plan-todo-list renderer missing");
-	assert.ok(renderers["plan-complete"], "plan-complete renderer missing");
-
-	const todo = renderers["plan-todo-list"]({ content: "**Plan Steps (2):**\n\n1. First\n2. Second" }, {}, fakeTheme);
-	const done = renderers["plan-complete"]({ content: "**Plan Complete!** ✓\n\n1. First" }, {}, fakeTheme);
-
-	assert.match(todo.render(120).join("\n"), /Plan Steps/);
-	assert.match(todo.render(120).join("\n"), /First/);
-	assert.match(done.render(120).join("\n"), /Plan Complete/);
-});
-
 test("recall tools extension registers load/save tools", async () => {
 	const { pi, commands } = createPiHarness();
 	recallToolsExt(pi);
 	assert.ok(commands["recall_mcp_load"], "recall_mcp_load tool missing");
 	assert.ok(commands["recall_save"], "recall_save tool missing");
+});
+
+test("jina-index extension registers build/list/search tools", async () => {
+	const { pi, commands } = createPiHarness();
+	jinaIndexExt(pi);
+	assert.ok(commands["jina_index_build"], "jina_index_build tool missing");
+	assert.ok(commands["jina_index_list"], "jina_index_list tool missing");
+	assert.ok(commands["jina_index_search"], "jina_index_search tool missing");
 });
 
 test("recall save creates project identity in caller cwd", async () => {
@@ -366,4 +370,39 @@ Respond with exactly: pong
 		else process.env.PI_SUBAGENT_BIN = previous;
 		await fs.rm(tmpDir, { recursive: true, force: true });
 	}
+});
+
+test("bm25 ranks ast tools above unrelated tools for ast query", () => {
+	const docs = [
+		{ name: "ast_grep", description: "Search code via tree-sitter ast patterns; structural match by syntax" },
+		{ name: "ast_edit", description: "Apply ast-based structural edits to TypeScript and JavaScript code" },
+		{ name: "fetch", description: "Fetch a URL and return body as text" },
+		{ name: "calculator", description: "Evaluate arithmetic expressions" },
+		{ name: "read", description: "Read a file from the local filesystem" },
+	];
+	const index = buildIndex(docs, (d) => `${d.name} ${d.description}`);
+	const hits = search(index, "ast refactor structural", { limit: 3 });
+
+	assert.ok(hits.length >= 2, `expected at least 2 hits, got ${hits.length}`);
+	assert.ok(
+		["ast_grep", "ast_edit"].includes(hits[0]!.doc.name),
+		`top hit should be an ast tool, got ${hits[0]!.doc.name}`,
+	);
+	assert.ok(hits[0]!.score > 0, "score should be positive");
+});
+
+test("bm25 returns empty for unrelated query", () => {
+	const docs = [
+		{ name: "read", description: "Read a file from the local filesystem" },
+		{ name: "bash", description: "Run shell command" },
+	];
+	const index = buildIndex(docs, (d) => `${d.name} ${d.description}`);
+	const hits = search(index, "matplotlib pyplot chart");
+	assert.equal(hits.length, 0, "should return no hits when nothing matches");
+});
+
+test("bm25 handles empty index without crashing", () => {
+	const index = buildIndex<{ name: string }>([], (d) => d.name);
+	const hits = search(index, "anything");
+	assert.equal(hits.length, 0);
 });
