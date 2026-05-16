@@ -497,15 +497,26 @@ export default function (pi: ExtensionAPI) {
 				});
 
 			const theme = ctx.ui.theme;
-			const showHud = (title: string, lines: string[], tone: "accent" | "success" | "warning" | "error" | "muted" = "accent") =>
+
+			// Compact footer pill while subagent tool is active.
+			const setSubStatus = (text: string | undefined, tone: "accent" | "success" | "warning" | "error" | "muted" = "accent") => {
+				if (!ctx.hasUI) return;
+				ctx.ui.setStatus("subagent", text ? theme.fg(tone, text) : undefined);
+			};
+
+			const showHud = (title: string, lines: string[], tone: "accent" | "success" | "warning" | "error" | "muted" = "accent") => {
 				setWorkflowHud(ctx, title, lines, tone);
+				setSubStatus(`sub: ${title}`, tone);
+			};
 			const finishHud = (status: string, tone: "accent" | "success" | "warning" | "error" | "muted" = "accent") => {
 				if (!ctx.hasUI) return;
 				ctx.ui.setStatus("subagent-hud", theme.fg(tone, status));
 				ctx.ui.setWidget("subagent-hud", undefined);
+				setSubStatus(undefined);
 			};
 
-			if (modeCount !== 1) {
+			try {
+				if (modeCount !== 1) {
 				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
 				return {
 					content: [
@@ -544,6 +555,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (chain && chain.length > 0) {
+				if (ctx.hasUI) ctx.ui.notify(`Subagents: chain (${chain.length} steps)`, "info");
 				const results: SingleResult[] = [];
 				let previousOutput = "";
 				showHud(
@@ -622,6 +634,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (tasks && tasks.length > 0) {
+				if (ctx.hasUI) ctx.ui.notify(`Subagents: parallel (${tasks.length} tasks)`, "info");
 				if (tasks.length > MAX_PARALLEL_TASKS)
 					return {
 						content: [
@@ -730,6 +743,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (params.agent && params.task) {
+				if (ctx.hasUI) ctx.ui.notify(`Subagent: ${params.agent}`, "info");
 				showHud(
 					`Single · ${params.agent}`,
 					[
@@ -789,6 +803,9 @@ export default function (pi: ExtensionAPI) {
 				content: [{ type: "text", text: `Invalid parameters. Available agents: ${available}` }],
 				details: makeDetails("single")([]),
 			};
+		} finally {
+			setSubStatus(undefined);
+		}
 		},
 
 		renderCall(args, theme, _context) {

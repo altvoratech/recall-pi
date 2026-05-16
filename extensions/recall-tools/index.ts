@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { isSmallTalk } from "../shared/intent.ts";
 
 type RecallSettings = {
 	url: string;
@@ -33,35 +34,10 @@ const LOGS_DIR = path.join(path.dirname(CLIENT_SCRIPT), "logs");
 // Secondary defense: saves an MCP round-trip for obvious small talk.
 // Backend gate is authoritative; this is just a fast-path optimization.
 
-const _SMALL_TALK = new Set([
-	"oi", "olá", "ola", "bom dia", "boa tarde", "boa noite",
-	"e aí", "e ai", "hello", "hi", "hey", "opa", "eae",
-	"e aí pessoal", "eae pessoal", "fala", "salve", "yo", "yo yo",
-	"obrigado", "obrigada", "valeu", "thanks", "thank you", "thank u",
-	"thx", "vlw", "agradeço", "agradeco", "merci",
-	"ok", "sim", "não", "nao", "yes", "no", "blz", "beleza",
-	"show", "perfeito", "certo", "combinado", "deal", "uhum", "s",
-	"tchau", "bye", "até mais", "ate mais", "até logo", "ate logo",
-	"flw", "flws", "até", "ate", "goodbye",
-]);
-
-function _normalize(text: string): string {
-	// Strip accents so "e aí" -> "e ai", "olá" -> "ola", etc.
-	const stripped = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-	return stripped.toLowerCase().replace(/[^\w\s]/g, "").trim();
-}
-
 function isRecallWorthy(query: string): boolean {
 	const text = query.trim();
 	if (!text) return false;
-	const normalized = _normalize(text);
-	if (_SMALL_TALK.has(normalized)) return false;
-	const words = normalized.split(/\s+/);
-	if (words.length <= 2) {
-		const full = words.join(" ");
-		if (_SMALL_TALK.has(full)) return false;
-	}
-	return true;
+	return !isSmallTalk(text);
 }
 
 function ensureLogsDir(): void {

@@ -16,9 +16,10 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type AgentConfig, discoverAgents } from "./subagent-env/agents.ts";
+import { classifierWordToTier, lexicalComplexityTier, normalizeText, type ComplexityTier } from "./shared/intent.ts";
 import { readGlobalSettings } from "./shared/settings.ts";
 
-type Tier = "skip" | "inject" | "auto";
+type Tier = ComplexityTier;
 
 const SETTINGS_PATH = join(homedir(), ".pi/agent/settings.json");
 
@@ -91,16 +92,75 @@ async function resolveClassifierCreds(
 
 const cache = new Map<string, { tier: Tier; ts: number }>();
 
+// Anti-silent-failure: if the classifier breaks, auto-delegation silently degrades.
+// Make that visible to the operator via footer status + notify (throttled).
+const CLASSIFIER_ERROR_THROTTLE_MS = 60_000;
+let lastClassifierErrorTs = 0;
+let lastClassifierError = "";
+
+function reportClassifierFailure(ctx: ExtensionContext | undefined, message: string): void {
+	const now = Date.now();
+	const normalized = message.trim();
+	const shouldEmit =
+		!normalized
+			? true
+			: normalized !== lastClassifierError || now - lastClassifierErrorTs > CLASSIFIER_ERROR_THROTTLE_MS;
+
+	if (shouldEmit) {
+		lastClassifierErrorTs = now;
+		lastClassifierError = normalized;
+	}
+
+	// UI: footer status + toast. Non-UI modes: stderr (so CI/piping sees it).
+	const hasUiSurface = Boolean(ctx?.hasUI && (ctx as any)?.ui);
+	const ui = hasUiSurface ? (ctx as any).ui : undefined;
+	const theme = ui?.theme;
+	const setStatus = typeof ui?.setStatus === "function" ? (ui.setStatus as (k: string, v: string | undefined) => void) : undefined;
+	const notify = typeof ui?.notify === "function" ? (ui.notify as (t: string, tone: any) => void) : undefined;
+	const fg = typeof theme?.fg === "function" ? (theme.fg as (c: any, t: string) => string) : undefined;
+
+	if (hasUiSurface && fg && setStatus) {
+		if (normalized) {
+			setStatus("subagent-classifier", fg("error", "sub:auto ✗"));
+			if (shouldEmit && notify) {
+				notify(`Subagent classifier failed — auto-delegation degraded.\n${normalized}`, "error");
+			}
+		} else {
+			setStatus("subagent-classifier", undefined);
+		}
+		return;
+	}
+
+	if (normalized && shouldEmit) {
+		try {
+			process.stderr.write(`[subagent-policy] classifier failed; auto-delegation degraded: ${normalized}\n`);
+		} catch {
+			// ignore
+		}
+	}
+}
+
 async function classify(prompt: string, ctx?: ExtensionContext): Promise<Tier> {
-	const key = prompt.trim().slice(0, 500);
+	const trimmed = prompt.trim();
+	const key = trimmed.slice(0, 500);
 	if (!key) return "skip";
+
+	// Deterministic short-circuits:
+	// - if the prompt already has the router prefix (injected by our input hook),
+	//   do not re-classify (avoids redundant classifier calls + tier drift).
+	const normalized = normalizeText(trimmed);
+	if (normalized.startsWith("auto delegation router") || normalized.includes("[auto-delegation router]")) {
+		return "auto";
+	}
 
 	const hit = cache.get(key);
 	if (hit && Date.now() - hit.ts < CACHE_TTL_MS) return hit.tier;
 
 	const { provider, model: modelId } = resolveProviderModel();
 	const creds = await resolveClassifierCreds(provider, modelId, ctx);
-	if (!creds) return "inject"; // fallback conservador se config faltar
+	// If the classifier can't be used (missing creds / registry), fall back to a
+	// conservative lexical heuristic so auto-delegation still works for obvious cases.
+	if (!creds) return lexicalComplexityTier(trimmed);
 
 	const ctl = new AbortController();
 	const timer = setTimeout(() => ctl.abort(), CLASSIFIER_TIMEOUT_MS);
@@ -117,24 +177,31 @@ async function classify(prompt: string, ctx?: ExtensionContext): Promise<Tier> {
 			body: JSON.stringify({
 				model: creds.model,
 				temperature: 0,
-				max_tokens: 4,
+				// Kilo/Azure gateway enforces min output tokens (>=16). Lower values hard-fail with HTTP 400.
+				max_tokens: 16,
 				messages: [
 					{ role: "system", content: CLASSIFIER_SYSTEM },
 					{ role: "user", content: prompt.slice(0, 2000) },
 				],
 			}),
 		});
+		if (!r.ok) {
+			const raw = (await r.text()).slice(0, 800);
+			throw new Error(`HTTP ${r.status} from classifier gateway: ${raw}`);
+		}
+
 		const j: any = await r.json();
-		const word = String(j?.choices?.[0]?.message?.content ?? "").toLowerCase().trim();
-		const tier: Tier = word.startsWith("complex")
-			? "auto"
-			: word.startsWith("moder")
-				? "inject"
-				: "skip";
+		const word = String(j?.choices?.[0]?.message?.content ?? "");
+		const tier: Tier = classifierWordToTier(word);
 		cache.set(key, { tier, ts: Date.now() });
+
+		// Classifier healthy again.
+		reportClassifierFailure(ctx, "");
 		return tier;
-	} catch {
-		return "inject";
+	} catch (error) {
+		reportClassifierFailure(ctx, (error as Error)?.message || String(error));
+		// Preserve skip/auto behavior when classifier is flaky (network, 401, timeout, etc).
+		return lexicalComplexityTier(trimmed);
 	} finally {
 		clearTimeout(timer);
 	}

@@ -28,6 +28,9 @@ Checklist para auditar aderência deste repositório à documentação oficial d
 - [x] Fonte única de agents em `extensions/subagent-env/agents/*.md`.
 - [x] Sem duplicação ativa em `agents/` no root.
 - [x] Discovery de agents documentado como custom (`user`, `project`, `extension`).
+- [x] `subagent-policy` usa classifier LLM; **não** usar `max_tokens < 16` (kilo/Azure hard-fail HTTP 400).
+- [x] Falhas do classifier são visíveis (footer status + notify + stderr), sem degradação silenciosa.
+- [x] `custom-footer` renderiza `footerData.getExtensionStatuses()` (não esconder status de subagent/classifier).
 - [ ] Validar após mudanças se `agentScope` default e confirmação de project agents continuam coerentes.
 
 ## 5) Documentação do repo
@@ -50,4 +53,4 @@ Checklist para auditar aderência deste repositório à documentação oficial d
 
 ---
 
-Última atualização: 2026-05-14
+Última atualização: 2026-05-16

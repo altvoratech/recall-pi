@@ -68,9 +68,27 @@ export default function (pi: ExtensionAPI) {
 							const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "no-model";
 							const thinking = pi.getThinkingLevel?.();
 							const usage = ctx.getContextUsage();
+							const statuses = footerData.getExtensionStatuses();
 
 							const branchStr = branch ? theme.fg("muted", ` (${branch})`) : "";
 							const thinkStr = thinking ? theme.fg("dim", ` · ${thinking}`) : "";
+
+							// Compact status pills (important when subagents/classifier are active).
+							const statusText = (() => {
+								if (!statuses || statuses.size === 0) return "";
+								const priority = ["subagent", "subagent-hud", "subagent-classifier", "recall-context", "status-line"];
+								const parts: string[] = [];
+								for (const key of priority) {
+									const v = statuses.get(key);
+									if (v) parts.push(v);
+								}
+								for (const [k, v] of Array.from(statuses.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+									if (!v) continue;
+									if (priority.includes(k)) continue;
+									parts.push(v);
+								}
+								return parts.length ? parts.join(theme.fg("dim", "  ")) : "";
+							})();
 
 							// Row 1: cwd + branch ............................ model · thinking
 							const l1L = theme.fg("text", cwd) + branchStr;
@@ -86,17 +104,14 @@ export default function (pi: ExtensionAPI) {
 							];
 							const line2 = truncateToWidth(tokensParts.join("  "), width);
 
-							// Row 3: cost · ctx · compaction
+							// Row 3: cost · ctx · statuses
 							const ctxStr =
 								usage && usage.percent !== null && usage.tokens !== null
 									? `ctx ${usage.percent.toFixed(1)}%/${fmtTokens(usage.contextWindow)}`
 									: "ctx —";
 							const costStr = `$${cost.toFixed(3)}`;
-							const line3Parts = [
-								theme.fg("accent", costStr),
-								theme.fg("text", ctxStr),
-								theme.fg("dim", "auto"),
-							];
+							const line3Parts = [theme.fg("accent", costStr), theme.fg("text", ctxStr)];
+							if (statusText) line3Parts.push(statusText);
 							const line3 = truncateToWidth(line3Parts.join("  ·  "), width);
 
 							return [line1, line2, line3];

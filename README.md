@@ -103,10 +103,18 @@ Setup helper:
 
 ```bash
 cd extensions
-npm test          # 10 unit tests (mocked classifier)
+npm test          # unit tests (mocked classifier, settings parser, permission predicates)
 npm run typecheck # tsc strict
-PI_TEST_LIVE=1 npm test  # +1 live test against kilo gateway (no cost)
+PI_TEST_LIVE=1 npm test  # includes a live classifier test against the kilo gateway
 ```
+
+**Subagents auto-delegation (postmortem + fix):**
+- Root cause: classifier request used `max_tokens: 4`. The kilo/Azure gateway enforces a minimum output-token budget (>=16) → HTTP 400 → classifier fell back, returning non-`auto` tiers → auto-delegation never triggered.
+- Fix: `max_tokens` bumped to **16**.
+- Anti-silent-failure: classifier errors are now visible via `ctx.ui.setStatus("subagent-classifier", ...)` (footer pill) + `ctx.ui.notify()` (throttled) + structured stderr in non-UI modes.
+- Visibility restored: `custom-footer.ts` renders `footerData.getExtensionStatuses()` and `subagent-env` sets a compact `subagent` status while running.
+
+Validated end-to-end with `PI_TEST_LIVE=1 npm test` (live kilo gateway test passing).
 
 ## Roadmap
 
