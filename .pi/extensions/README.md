@@ -9,7 +9,7 @@ Coleção de extensões do Pi para este ambiente.
 - `compaction-snapshot/` — persiste o summary cumulativo do custom-compaction em disco (cache local efêmero por sessão)
 - `tool-discovery/` — BM25 index das tools registradas + `search_tool` pra ativar on-demand sem inflar system prompt
 - `command-bridge/` — lê slash commands de `~/.claude/`, `~/.codex/`, `~/.opencode/` e expõe no Pi como `/<source>:<name>`
-- `subagent-env/` — suporte a ambiente de subagentes
+- `subagent-env/` — suporte a ambiente de subagentes (scout, debugger, planner, worker, reviewer). Modelos definidos via `models.template.json` (kilo) + built-in (openai-codex). Agents em `agents/*.md`.
 - `status-line.ts` / `working-indicator.ts` / `model-status.ts` — status da UI
 
 ## Recall

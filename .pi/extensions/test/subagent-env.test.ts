@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import statusLineExt from "../status-line.ts";
 import subagentPolicyExt from "../subagent-policy.ts";
@@ -42,6 +43,8 @@ function createPiHarness() {
 	return { pi, handlers, commands, renderers };
 }
 
+const EXT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
 const AGENT_MODEL_EXPECTATIONS = [
 	["scout", "model: kilo/gpt-4.1-mini"],
 	["planner", "model: openai-codex/gpt-5.4"],
@@ -51,7 +54,7 @@ const AGENT_MODEL_EXPECTATIONS = [
 
 test("bundled subagents match model declared in md", async () => {
 	for (const [name, expected] of AGENT_MODEL_EXPECTATIONS) {
-		const file = path.join("subagent-env", "agents", `${name}.md`);
+		const file = path.join(EXT_ROOT, "subagent-env", "agents", `${name}.md`);
 		const content = await fs.readFile(file, "utf8");
 		assert.ok(content.includes(expected), `${name} should include ${expected}`);
 	}
@@ -110,18 +113,6 @@ test("working indicator can hide and restore the loader row", async () => {
 	assert.ok(indicatorCalls.length >= 2);
 });
 
-function mockClassifierFetch(word: "trivial" | "moderada" | "complexa") {
-	const original = globalThis.fetch;
-	globalThis.fetch = (async () =>
-		new Response(JSON.stringify({ choices: [{ message: { content: word } }] }), {
-			status: 200,
-			headers: { "content-type": "application/json" },
-		})) as typeof fetch;
-	return () => {
-		globalThis.fetch = original;
-	};
-}
-
 function mockClassifierCtx(extra: Record<string, unknown> = {}) {
 	return {
 		...extra,
@@ -132,86 +123,58 @@ function mockClassifierCtx(extra: Record<string, unknown> = {}) {
 	} as any;
 }
 
-test("subagent policy auto-delegates when classifier returns 'complexa'", async () => {
-	const restore = mockClassifierFetch("complexa");
-	try {
-		const { pi, handlers } = createPiHarness();
-		subagentPolicyExt(pi);
+test("subagent policy auto-delegates when lexical heuristic returns 'auto'", async () => {
+	const { pi, handlers } = createPiHarness();
+	subagentPolicyExt(pi);
 
-		const response = await handlers.input?.(
-			{ text: "investiga o repo X e propoe refactor em varios arquivos " + Math.random(), source: "interactive" },
-			mockClassifierCtx({ hasUI: true, ui: { notify: () => undefined } }),
-		);
+	const response = await handlers.input?.(
+		{ text: "investiga o repo X e propoe refactor em varios arquivos " + Math.random(), source: "interactive" },
+		mockClassifierCtx({ hasUI: true, ui: { notify: () => undefined } }),
+	);
 
-		assert.equal(response?.action, "transform");
-		assert.match(String(response?.text ?? ""), /\[AUTO-DELEGATION ROUTER\]/);
-		assert.match(String(response?.text ?? ""), /scout/);
-		assert.match(String(response?.text ?? ""), /worker/);
-	} finally {
-		restore();
-	}
+	assert.equal(response?.action, "transform");
+	assert.match(String(response?.text ?? ""), /\[AUTO-DELEGATION ROUTER\]/);
+	assert.match(String(response?.text ?? ""), /scout/);
+	assert.match(String(response?.text ?? ""), /worker/);
 });
 
-test("subagent policy injects guidance when classifier returns 'moderada'", async () => {
-	const restore = mockClassifierFetch("moderada");
-	try {
-		const { pi, handlers } = createPiHarness();
-		subagentPolicyExt(pi);
+test("subagent policy injects guidance when lexical heuristic returns 'inject'", async () => {
+	const { pi, handlers } = createPiHarness();
+	subagentPolicyExt(pi);
 
-		const response = await handlers.before_agent_start?.(
-			{ prompt: "le esses dois arquivos e me explica " + Math.random(), systemPrompt: "BASE" },
-			mockClassifierCtx({ hasUI: false }),
-		);
+	const response = await handlers.before_agent_start?.(
+		{ prompt: "le esses dois arquivos e me explica " + Math.random(), systemPrompt: "BASE" },
+		mockClassifierCtx({ hasUI: false }),
+	);
 
-		assert.ok(response?.systemPrompt?.includes("[SUBAGENT POLICY]"));
-		assert.ok(response?.systemPrompt?.includes("scout"));
-		assert.ok(response?.systemPrompt?.includes("reviewer"));
-	} finally {
-		restore();
-	}
+	assert.ok(response?.systemPrompt?.includes("[SUBAGENT POLICY]"));
+	assert.ok(response?.systemPrompt?.includes("scout"));
+	assert.ok(response?.systemPrompt?.includes("reviewer"));
 });
 
-test("subagent policy skips when classifier returns 'trivial'", async () => {
-	const restore = mockClassifierFetch("trivial");
-	try {
-		const { pi, handlers } = createPiHarness();
-		subagentPolicyExt(pi);
+test("subagent policy skips when lexical heuristic returns 'skip'", async () => {
+	const { pi, handlers } = createPiHarness();
+	subagentPolicyExt(pi);
 
-		const inputResp = await handlers.input?.(
-			{ text: "oi " + Math.random(), source: "interactive" },
-			mockClassifierCtx({ hasUI: true, ui: { notify: () => undefined } }),
-		);
-		assert.equal(inputResp?.action, "continue");
+	const inputResp = await handlers.input?.(
+		{ text: "oi", source: "interactive" },
+		mockClassifierCtx({ hasUI: true, ui: { notify: () => undefined } }),
+	);
+	assert.equal(inputResp?.action, "continue");
 
-		const beforeResp = await handlers.before_agent_start?.(
-			{ prompt: "oi " + Math.random(), systemPrompt: "BASE" },
-			mockClassifierCtx({ hasUI: false }),
-		);
-		assert.equal(beforeResp, undefined);
-	} finally {
-		restore();
-	}
+	const beforeResp = await handlers.before_agent_start?.(
+		{ prompt: "oi", systemPrompt: "BASE" },
+		mockClassifierCtx({ hasUI: false }),
+	);
+	assert.equal(beforeResp, undefined);
 });
 
-// Live integration test against the kilo gateway. Opt-in via PI_TEST_LIVE=1.
-// Uses kilo-auto/small (free routing when account has no balance) so it
-// costs nothing to run. Validates that:
-//   1. Credentials in models.json + settings.json resolve correctly
-//   2. The gateway accepts our request shape
-//   3. A real complex prompt in PT classifies as auto (or at least !== skip)
-test("subagent policy classifies a complex PT prompt via live kilo gateway", { skip: process.env.PI_TEST_LIVE !== "1" }, async () => {
+// Legacy live test — LLM classifier removed. Kept as smoke test for lexical tier.
+// The lexical heuristic is deterministic; this test just validates it doesn't crash.
+test("subagent policy classifies a complex PT prompt via lexical heuristic", { skip: process.env.PI_TEST_LIVE !== "1" }, async () => {
 	const settingsPath = path.join(os.homedir(), ".pi/agent/settings.json");
 	const original = await fs.readFile(settingsPath, "utf8");
 	const settings = JSON.parse(original);
-	const liveSettings = {
-		...settings,
-		subagentPolicy: {
-			classifierProvider: "kilo",
-			classifierModel: "kilo-auto/small",
-		},
-	};
-	await fs.writeFile(settingsPath, JSON.stringify(liveSettings, null, 2));
-
 	try {
 		const { pi, handlers } = createPiHarness();
 		subagentPolicyExt(pi);
@@ -222,12 +185,12 @@ test("subagent policy classifies a complex PT prompt via live kilo gateway", { s
 
 		const response = await handlers.input?.(
 			{ text: prompt, source: "interactive" },
-			{ hasUI: true, ui: { notify: () => undefined } } as any,
+			mockClassifierCtx({ hasUI: true, ui: { notify: () => undefined } }),
 		);
 
-		// We don't assert exact tier — model may classify as moderada or complexa.
-		// We assert the call didn't blow up and produced a known action shape.
-		assert.ok(response === undefined || response.action === "continue" || response.action === "transform");
+		// Lexical heuristic should flag this as "auto" (strong complex phrases present).
+		assert.equal(response?.action, "transform");
+		assert.match(String(response?.text ?? ""), /\[AUTO-DELEGATION ROUTER\]/);
 	} finally {
 		await fs.writeFile(settingsPath, original);
 	}
@@ -248,45 +211,50 @@ test("jina-index extension registers build/list/search tools", async () => {
 	assert.ok(commands["jina_index_search"], "jina_index_search tool missing");
 });
 
-test("recall save creates project identity in caller cwd", async () => {
-	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-recall-save-"));
-	const settings = JSON.parse(await fs.readFile("/home/g/.pi/agent/settings.json", "utf8")).recall;
-	const payload = {
-		cwd: tmpDir,
-		coreDir: "/home/g/recall-core",
-		url: settings.url,
-		bearerToken: settings.bearerToken,
-		pythonPath: settings.pythonPath,
-		sessionTitle: "Pi recall save smoke test",
-		sessionNotes: "Validating that the client creates .recall in the session cwd, not in recall-core.",
-		projectName: "pi-test-project",
-		addFiles: ["/home/g/recall-pi/extensions/recall-tools/index.ts"],
-	};
+test(
+	"recall save creates project identity in caller cwd",
+	{ skip: process.env.PI_TEST_RECALL_SAVE !== "1" },
+	async () => {
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-recall-save-"));
+		const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+		const settings = JSON.parse(await fs.readFile(settingsPath, "utf8")).recall;
+		const payload = {
+			cwd: tmpDir,
+			coreDir: settings.coreDir,
+			url: settings.url,
+			bearerToken: settings.bearerToken,
+			pythonPath: settings.pythonPath,
+			sessionTitle: "Pi recall save smoke test",
+			sessionNotes: "Validating that the client creates .recall in the session cwd, not in recall-core.",
+			projectName: "pi-test-project",
+			addFiles: [path.join(EXT_ROOT, "recall-tools", "index.ts")],
+		};
 
-	try {
-		const res = await new Promise<string>((resolve, reject) => {
-			const proc = spawn(settings.pythonPath, [
-				"/home/g/recall-pi/extensions/recall-tools/recall_mcp_client.py",
-				"save",
-				JSON.stringify(payload),
-			]);
-			let stdout = "";
-			let stderr = "";
-			proc.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
-			proc.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
-			proc.on("close", (code: number) => {
-				if (code === 0) resolve(stdout);
-				else reject(new Error(stderr || stdout || `exit ${code}`));
+		try {
+			const res = await new Promise<string>((resolve, reject) => {
+				const proc = spawn(settings.pythonPath, [
+					path.join(EXT_ROOT, "recall-tools", "recall_mcp_client.py"),
+					"save",
+					JSON.stringify(payload),
+				]);
+				let stdout = "";
+				let stderr = "";
+				proc.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+				proc.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+				proc.on("close", (code: number) => {
+					if (code === 0) resolve(stdout);
+					else reject(new Error(stderr || stdout || `exit ${code}`));
+				});
 			});
-		});
-		const out = JSON.parse(res);
-		assert.equal(out.ok, true);
-		assert.ok(await fs.stat(path.join(tmpDir, ".recall", "project.json")));
-		assert.ok(out.project?.file?.startsWith(tmpDir), "project file must live in caller cwd");
-	} finally {
-		await fs.rm(tmpDir, { recursive: true, force: true });
-	}
-});
+			const out = JSON.parse(res);
+			assert.equal(out.ok, true);
+			assert.ok(await fs.stat(path.join(tmpDir, ".recall", "project.json")));
+			assert.ok(out.project?.file?.startsWith(tmpDir), "project file must live in caller cwd");
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	},
+);
 
 
 test("subagent tool can run a project-local agent", async () => {

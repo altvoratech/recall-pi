@@ -9,6 +9,6 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["**/*.ts"],
+  "include": [".pi/extensions/**/*.ts"],
   "exclude": ["node_modules", "dist", "build"]
 }

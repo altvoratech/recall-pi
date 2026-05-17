@@ -1,56 +1,53 @@
 # Conformance Checklist — Pi docs x recall-pi
 
-Checklist para auditar aderência deste repositório à documentação oficial do Pi.
+Checklist para auditar aderência deste repositório às docs oficiais do Pi e ao padrão adotado neste projeto.
 
-## 1) Settings
+## 1) Package layout (`.pi/` como runtime)
+- [x] `package.json` está na raiz do repositório (manifesto principal do pacote).
+- [x] Bloco `pi.extensions` aponta para `./.pi/extensions`.
+- [x] Bloco `pi.prompts` aponta para `./.pi/prompts`.
+- [x] Não há cópia ativa de runtime em `extensions/`, `prompts/`, `scripts/` na raiz.
+
+## 2) Settings
 - [x] Existe `.pi/settings.json` no projeto.
-- [x] `extensions` aponta para `../extensions`.
-- [x] `prompts` aponta para `../prompts`.
 - [x] `systemRules.path` aponta para `../GLOBAL_RULES.md`.
-- [ ] Validar periodicamente compatibilidade das chaves custom (`subagentPolicy`, `compaction.thresholdTokens`, etc.) com a versão atual do Pi.
+- [x] Chaves custom (`subagentPolicy`, `compaction`) estão no escopo de projeto.
+- [x] `subagentPolicy` usa heurística léxica (zero tokens) — sem dependência de provider externo.
+- [ ] Revalidar compatibilidade dessas chaves a cada upgrade do Pi.
 
-## 2) Extensions
-- [x] Extensões carregadas via settings (sem depender só de `-e`).
-- [x] Estrutura compatível com docs (`index.ts` em subpastas e `.ts` no topo).
-- [x] `extensions/package.json` inclui `keywords: ["pi-package"]`.
-- [x] `extensions/package.json` inclui bloco `pi.extensions`.
-- [ ] Revisar, a cada upgrade de Pi, APIs usadas nos hooks/eventos para evitar quebra.
+## 3) Extensions
+- [x] Extensões centralizadas em `.pi/extensions`.
+- [x] Estrutura compatível com docs (arquivos `.ts` no topo e `index.ts` em subpastas quando necessário).
+- [x] Sem `package.json` aninhado dentro de `.pi/extensions` (tooling centralizado no root).
+- [ ] Revisar APIs de hooks/eventos a cada versão do Pi para evitar regressão.
 
-## 3) Prompt templates
-- [x] Templates centralizados em `prompts/*.md`.
-- [x] Cada template possui frontmatter com `description`.
-- [x] Sem duplicação ativa de prompts em `extensions/subagent-env/prompts`.
-- [ ] Se adicionar novos templates, manter nomes curtos e únicos para comandos `/`.
+## 4) Prompt templates
+- [x] Templates em `.pi/prompts/*.md`.
+- [x] Frontmatter com `description`.
+- [x] Nomes curtos e únicos para comandos `/`.
 
-## 4) Subagents (custom)
-> Nota: subagents não são feature nativa do Pi; são comportamento implementado pela extensão `subagent-env`.
+## 5) Subagents (custom)
+> Nota: subagents não são feature nativa do Pi; são comportamento da extensão `subagent-env`.
 
-- [x] Fonte única de agents em `extensions/subagent-env/agents/*.md`.
-- [x] Sem duplicação ativa em `agents/` no root.
-- [x] Discovery de agents documentado como custom (`user`, `project`, `extension`).
-- [x] `subagent-policy` usa classifier LLM; **não** usar `max_tokens < 16` (kilo/Azure hard-fail HTTP 400).
-- [x] Falhas do classifier são visíveis (footer status + notify + stderr), sem degradação silenciosa.
-- [x] `custom-footer` renderiza `footerData.getExtensionStatuses()` (não esconder status de subagent/classifier).
-- [ ] Validar após mudanças se `agentScope` default e confirmação de project agents continuam coerentes.
-
-## 5) Documentação do repo
-- [x] README atualizado para fluxo com `.pi/settings.json` local.
-- [x] Instrução de symlink obrigatório removida.
-- [x] Estrutura do projeto no README reflete diretórios atuais.
-- [ ] Atualizar README sempre que mover prompts/agents/extensions.
+- [x] Fonte única de agents em `.pi/extensions/subagent-env/agents/*.md`.
+- [x] Sem duplicação ativa em `~/.pi/agent/extensions/subagent-env`.
+- [x] `subagent-policy` usa heurística léxica local (`lexicalComplexityTier`) — zero latência, zero custo.
+- [x] Fallback léxico já existia; agora é o mecanismo principal.
+- [ ] Revalidar defaults de `agentScope` e confirmação de agentes locais após mudanças.
 
 ## 6) Qualidade e validação
-- [x] Typecheck passando (`cd extensions && npm run typecheck`).
-- [x] Testes passando (`cd extensions && npm test`).
-- [ ] Incluir este checklist em revisão de PR que altere configuração do Pi.
+- [x] Typecheck passando (`npm run typecheck`).
+- [x] Testes passando (`npm test`).
+- [x] Testes de integração live são opt-in por variável de ambiente (`PI_TEST_*`).
+- [ ] Incluir este checklist na revisão de PR que altere configuração do Pi.
 
 ## 7) Rotina de auditoria recomendada
 - [ ] A cada upgrade de `@earendil-works/pi-coding-agent`:
   1. Revisar `docs/settings.md`, `docs/extensions.md`, `docs/prompt-templates.md`, `docs/packages.md`.
-  2. Rodar typecheck/testes.
-  3. Revalidar este checklist e marcar deltas.
-  4. Atualizar README e este arquivo se houver mudança de contrato.
+  2. Rodar `npm run typecheck` e `npm test`.
+  3. Revalidar este checklist e registrar deltas.
+  4. Atualizar README e docs de operação quando houver mudança de contrato.
 
 ---
 
-Última atualização: 2026-05-16
+Última atualização: 2026-05-17

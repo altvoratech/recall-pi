@@ -1,13 +1,13 @@
 # Dependencies
 node_modules/
-extensions/node_modules/
+.pi/extensions/node_modules/
 dist/
 build/
 
 # Logs (may contain session contents from recall hits — keep local only)
 **/logs/
 *.log
-extensions/recall-tools/logs/
+.pi/extensions/recall-tools/logs/
 
 # Editor / OS
 .DS_Store
@@ -20,5 +20,6 @@ extensions/recall-tools/logs/
 SESSION-NOTES-*.md
 RECALL_CORE_ANALYSIS.md
 
-# Compaction snapshots (runtime data, local cache)
+# Runtime data (local cache)
 compact-session/
+.pi/extensions/jina-index/_indexes/

@@ -16,11 +16,11 @@
 
 # recall-pi
 
-**NÃO USE ESTE REPO COMO SETUP GLOBAL DO PI.**
+Setup do Pi focado em **integração com recall MCP**, **orquestração de subagentes** e extensões de produtividade. Fica em cima do [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) sem fork: só configuração e extensões.
 
-Este repositório foi feito para ser executado como **projeto** (project-local) e a experiência/contratos assumem esse modo. Usar como global pode causar comportamento inesperado (principalmente em discovery de recursos, resolução de paths e credenciais de providers).
-
-Personal Pi coding-agent setup focused on **recall MCP integration**, **subagent orchestration**, and quality-of-life extensions. Sits on top of upstream [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) — no fork, only extensions and config.
+Pode ser usado em dois modos:
+- **project-local** (rodando dentro do repo), ou
+- **package global do Pi** (via `~/.pi/agent/settings.json` em `packages`).
 
 [![License](https://img.shields.io/badge/license-MIT-58A6FF?style=flat&labelColor=222222)](#license)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat&labelColor=222222&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -65,51 +65,89 @@ recall-pi is the **terminal-side client** for the recall-core memory ecosystem. 
 
 ```
 recall-pi/
-├── extensions/        # TypeScript Pi extensions
-│   ├── recall-tools/  # recall MCP client (load + save + auto-inject)
-│   ├── subagent-env/  # subagent tool (scout/planner/worker/reviewer)
-│   ├── subagent-policy.ts  # LLM-classifier delegation policy
-│   ├── system-rules.ts     # injects GLOBAL_RULES.md at prompt tail
-│   ├── status-line.ts      # custom footer status with subagent counter
-│   ├── trigger-compact.ts  # auto-compaction at token threshold
-│   ├── custom-compaction.ts# Gemini-based session summarizer
-│   ├── custom-footer.ts    # 3-line stats footer
-│   ├── permission-gate.ts  # sudo / sensitive command modal
-│   ├── protected-paths.ts  # write/edit confirmation on .env, .git, etc
-│   ├── confirm-destructive.ts # confirm /new (clear session)
-│   ├── notify.ts           # native terminal notification on agent_end
-│   └── working-indicator.ts# customizable spinner
 ├── .pi/
-│   └── settings.json  # project-local Pi settings
-├── .pi/prompts/       # slash command templates (project-local, recommended by Pi docs)
-├── prompts/           # legacy location (kept for now; source-of-truth may move)
-└── GLOBAL_RULES.md    # operator rules injected at prompt tail
+│   ├── extensions/       # TypeScript Pi extensions (single source of truth)
+│   ├── prompts/          # slash command templates
+│   ├── scripts/          # helper scripts (models sync, setup notes)
+│   └── settings.json     # project-local Pi settings
+├── models.template.json  # template for ~/.pi/agent/models.json (kilo provider)
+└── GLOBAL_RULES.md       # operator rules injected at prompt tail
 ```
+
+## Extension pack (resumo)
+
+Principais extensões em `.pi/extensions/`:
+- `permission-gate.ts` — intercepta comandos bash sensíveis e abre modal de confirmação/sudo
+- `recall-tools/` — integração com recall via MCP local (`recall_mcp_load`, `recall_save`)
+- `jina-index/` — indexação e busca semântica local de docs via Jina API
+- `compaction-snapshot/` — persiste snapshots de compaction no disco
+- `tool-discovery/` — índice BM25 de tools + `search_tool`
+- `command-bridge/` — expõe comandos de `~/.claude/`, `~/.codex/`, `~/.opencode/` no Pi
+- `subagent-env/` + `subagent-policy.ts` — ambiente e roteamento de subagentes
+- `status-line.ts` / `working-indicator.ts` / `custom-footer.ts` — UX e status da UI
+
+Comportamento de memória/identidade:
+- Recall lê configuração global (`~/.pi/agent/settings.json`) e env vars.
+- Injeção de contexto usa busca global (cross-project) quando aplicável.
+- Identidade do projeto vem de `.recall/project.json` no cwd.
+
+Artefatos locais importantes (não versionar):
+- `.firecrawl/`
+- `.pi/extensions/recall-tools/logs/`
+- `.pi/extensions/jina-index/_indexes/`
+- `SESSION-NOTES-*.md`
+- `RECALL_CORE_ANALYSIS.md`
+
+Segurança:
+- Nunca commitar tokens/senhas/chaves.
+- `recall-tools` sobrescreve `logs/latest.json` e evita histórico por prompt.
+- Preserve `.recall/` no projeto (UUID/identidade usada no recall).
+
+Observabilidade de orquestração:
+- Eventos críticos são gravados em `logs/system-log.jsonl`.
+- `source` agora é segmentado:
+  - `subagent-policy` (lexical/injeção)
+  - `subagent:tool` (início/fim do tool)
+  - `subagent:runner` (spawn e resultado do processo)
+  - `subagent:usage` (prova de uso real de subagent)
+- Rotação automática habilitada: `5 MB` por arquivo, mantendo até `5` históricos (`logs/system-log.1.jsonl` ... `.5`).
+- Para acompanhar em tempo real:
+  ```bash
+  tail -f logs/system-log.jsonl
+  ```
+- Para ver só uso real de subagent:
+  ```bash
+  grep '"source":"subagent:usage"' logs/system-log.jsonl | tail -n 20
+  ```
 
 ## Install
 
-1. Clone:
+1. Clone e instale:
    ```bash
    git clone <repo-url> ~/recall-pi
-   cd ~/recall-pi/extensions && npm install
+   cd ~/recall-pi && npm install
    ```
 
-2. O projeto já inclui `.pi/settings.json` e usa o **padrão recomendado do Pi**:
+2. O projeto já segue o padrão `.pi/`:
    - extensões em `.pi/extensions/`
    - prompt templates em `.pi/prompts/`
-   - regras globais via `systemRules.path` (apontando para `GLOBAL_RULES.md`)
+   - scripts em `.pi/scripts/`
 
-3. NÃO instale isso como setup global. Use rodando dentro do repo.
+3. Escolha o modo de uso:
+   - **Project-local:** rode o Pi dentro do repo.
+   - **Package global:** adicione o caminho do repo em `~/.pi/agent/settings.json` → `packages`.
+     - helper automático:
+       ```bash
+       npm run setup-pi-settings
+       ```
 
-4. Reinicie o Pi ou rode `/reload`. 
+4. Rode `/reload` no Pi.
 
 ## Test
 
 ```bash
-cd extensions
-npm test          # unit tests (mocked classifier, settings parser, permission predicates)
+npm test          # unit tests (lexical heuristic, settings parser, permission predicates)
 npm run typecheck # tsc strict
-PI_TEST_LIVE=1 npm test  # includes a live classifier test against the kilo gateway
 ```
 
 ## Image generation (Pi 0.74.1+)
@@ -129,25 +167,6 @@ export OPENROUTER_API_KEY=...
 - `/image <prompt>` (template) — chama `image_generate` com o modelo default `google/gemini-2.5-flash-image`.
 - Tool direta: `image_generate({ model, prompt, count?, size?, inputImageBase64?, inputImageMimeType? })`.
 
-## Models.json (Kilo classifier)
-
-O `subagent-policy` usa um classifier via provider OpenAI-compat (ex.: **kilo gateway**) e precisa que o provider exista em `~/.pi/agent/models.json` **com `apiKey` válido**.
-
-Este repo inclui um template sem secrets:
-- `models.template.json`
-
-Para sincronizar o template para o seu Pi global:
-
-```bash
-bash scripts/sync-models.sh
-```
-
-Depois **edite** `~/.pi/agent/models.json` e preencha:
-
-- `providers.kilo.apiKey`
-
-> Não commite chaves. O template no repo mantém `apiKey` vazio de propósito.
-
 ## Provider diagnostics
 
 - `/provider-doctor` — mostra status do provider/model atual e faz probes best-effort de:
@@ -156,20 +175,54 @@ Depois **edite** `~/.pi/agent/models.json` e preencha:
 
 Dica: se Together estiver "MISSING", rode `/login` e selecione Together.
 
-### Nota sobre o classifier de subagentes (HTTP 401 / paid model)
+## Models & providers
 
-Se aparecer algo como:
-`PAID_MODEL_AUTH_REQUIRED` / `You need to sign in to use this model`
+Os subagentes usam modelos de dois providers. Ambos precisam estar disponíveis:
 
-Isso significa que o `subagentPolicy.classifierProvider/classifierModel` está apontando para um modelo que exige login/assinatura naquele provider.
-A correção é ajustar o classifier para um provider/model com credencial válida (ou fazer login no provider correspondente).
-**Subagents auto-delegation (postmortem + fix):**
-- Root cause: classifier request used `max_tokens: 4`. The kilo/Azure gateway enforces a minimum output-token budget (>=16) → HTTP 400 → classifier fell back, returning non-`auto` tiers → auto-delegation never triggered.
-- Fix: `max_tokens` bumped to **16**.
-- Anti-silent-failure: classifier errors are now visible via `ctx.ui.setStatus("subagent-classifier", ...)` (footer pill) + `ctx.ui.notify()` (throttled) + structured stderr in non-UI modes.
-- Visibility restored: `custom-footer.ts` renders `footerData.getExtensionStatuses()` and `subagent-env` sets a compact `subagent` status while running.
+### Kilo (custom — requer `models.json`)
 
-Validated end-to-end with `PI_TEST_LIVE=1 npm test` (live kilo gateway test passing).
+Copie `models.template.json` para `~/.pi/agent/models.json` e preencha `apiKey`:
+
+```bash
+cp models.template.json ~/.pi/agent/models.json
+# Edite ~/.pi/agent/models.json e defina apiKey
+```
+
+Modelos registrados:
+| id | usado por |
+|---|---|
+| `gpt-4.1-mini` | scout |
+| `gpt-5-mini` | worker |
+| `qwen/qwen3.6-plus` | debugger |
+
+### OpenRouter (built-in — requer `OPENROUTER_API_KEY`)
+
+Provider built-in do Pi. Modelos free não consomem créditos:
+
+| id | usado por |
+|---|---|
+| `deepseek/deepseek-v4-flash:free` | reviewer |
+
+### OpenAI Codex (built-in — requer `/login`)
+
+Provider built-in do Pi. Autentique via OAuth:
+
+```
+/login
+# Selecione openai-codex e siga o fluxo OAuth no browser
+```
+
+Modelos usados:
+| id | usado por |
+|---|---|
+| `gpt-5.4` | planner |
+
+### Nota sobre subagentes
+
+A política de auto-delegação usa **heurística léxica** (zero tokens, zero latência).
+As chaves antigas `subagentPolicy.classifierProvider` / `classifierModel` / `classifierTimeoutMs` em `.pi/settings.json` não são mais necessárias e podem ser removidas.
+
+Os modelos dos subagentes são definidos no frontmatter de cada `.md` em `.pi/extensions/subagent-env/agents/`. Para trocar o modelo de um agente, edite o campo `model:` no arquivo correspondente e garanta que o provider/modelo existe no `models.json`.
 
 ## Roadmap
 
@@ -178,7 +231,7 @@ Validated end-to-end with `PI_TEST_LIVE=1 npm test` (live kilo gateway test pass
 ### V1 — current (standalone repo, MCP client)
 - Extensions packaged in dedicated repo
 - Subagent orchestration (scout / planner / worker / reviewer)
-- LLM classifier for auto-delegation (no regex)
+- Lexical heuristic for auto-delegation (zero tokens)
 - Global rules injected at prompt tail (authoritative over project AGENTS.md)
 - Auto-compaction at token threshold + Gemini-based summarizer
 - Custom 3-line footer with token/cost/context stats

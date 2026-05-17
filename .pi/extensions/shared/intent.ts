@@ -188,12 +188,4 @@ export function lexicalComplexityTier(prompt: string): ComplexityTier {
 	return lexicalComplexity(prompt).tier;
 }
 
-export function classifierWordToTier(word: string): ComplexityTier {
-	const w = normalizeText(word);
-	// Accept both pt-br and en variants.
-	if (w.startsWith("complex")) return "auto";
-	if (w.startsWith("moder")) return "inject";
-	if (w.startsWith("triv") || w.startsWith("simple") || w.startsWith("easy")) return "skip";
-	// Unknown classifier output: be safe and still inject policy (instead of silently skipping).
-	return "inject";
-}
+

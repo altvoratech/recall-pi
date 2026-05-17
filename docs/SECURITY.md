@@ -41,6 +41,30 @@ jq -c . ~/.pi/agent/audit.log | tail -50
 
 The log is append-only by convention; rotate manually if it grows too large.
 
+## Subagent orchestration system log
+
+For critical orchestration visibility, `subagent-policy` and `subagent` now append JSONL events to:
+
+- `logs/system-log.jsonl` (repo root)
+
+Typical events include policy injection (lexical tier), auto-delegation transforms, and subagent run start/end.
+
+`source` segmentation:
+- `subagent-policy`
+- `subagent:tool`
+- `subagent:runner`
+- `subagent:usage` (explicit signal that a subagent execution happened)
+
+Automatic rotation is enabled:
+- max file size: `5 MB`
+- retained history: `logs/system-log.1.jsonl` ... `logs/system-log.5.jsonl`
+
+Quick tail:
+
+```bash
+tail -f logs/system-log.jsonl
+```
+
 ## .recall/project.json — UUID custody
 
 `.recall/project.json` is the single source of truth that ties a working directory to a recall project. **Lose this file and you lose addressability of every session saved under that UUID.** Treat it like a private key:
@@ -53,7 +77,7 @@ The `protected-paths` extension blocks writes to `.recall/` by default, and `per
 
 ## Subagent isolation
 
-Each subagent invocation spawns a fresh `pi` process with `shell: false` and inherits the parent cwd. JSONL parse failures are now surfaced through the subagent's `stderr` field instead of being silently dropped, so a corrupted subprocess stream is visible in the result. The classifier in `subagent-policy` is rate-limited to 2 inflight calls to keep API quotas predictable.
+Each subagent invocation spawns a fresh `pi` process with `shell: false` and inherits the parent cwd. JSONL parse failures are now surfaced through the subagent's `stderr` field instead of being silently dropped, so a corrupted subprocess stream is visible in the result. The `subagent-policy` uses a lexical heuristic (zero API calls) to decide delegation tier.
 
 If `pi` cannot be resolved on `PATH`, the subagent tool now fails fast with an actionable error rather than hanging.
 

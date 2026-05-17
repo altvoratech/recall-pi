@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "cd extensions && npm test",
-    "typecheck": "cd extensions && npm run typecheck",
-    "setup-pi-settings": "scripts/setup-pi-settings.sh"
+    "test": "node --test --experimental-transform-types .pi/extensions/test/subagent-env.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json",
+    "setup-pi-settings": ".pi/scripts/setup-pi-settings.sh"
   },
   "description": "<div align=\"center\">",
   "main": "index.js",
@@ -17,7 +18,33 @@
     "type": "git",
     "url": "git+https://github.com/altvoratech/recall-pi.git"
   },
-  "keywords": [],
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./.pi/extensions"
+    ],
+    "prompts": [
+      "./.pi/prompts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.74.1",
+    "@earendil-works/pi-ai": "0.74.1",
+    "@earendil-works/pi-coding-agent": "0.74.1",
+    "@earendil-works/pi-tui": "0.74.1",
+    "@types/node": "^25.7.0",
+    "typebox": "*",
+    "typescript": "^6.0.3"
+  },
   "author": "",
   "license": "ISC",
   "bugs": {

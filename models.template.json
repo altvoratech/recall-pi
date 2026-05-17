@@ -1,4 +1,7 @@
 {
+  "//": "Copie este arquivo para ~/.pi/agent/models.json e preencha apiKey.",
+  "// openai-codex": "Provider built-in do pi. Autentique via /login (OAuth). Modelos: gpt-5.4, gpt-5.4-mini, etc.",
+  "// opencode-go": "Provider built-in do pi. Já configurado como defaultProvider.",
   "providers": {
     "kilo": {
       "baseUrl": "https://api.kilo.ai/api/gateway",
@@ -6,11 +9,21 @@
       "apiKey": "",
       "authHeader": true,
       "models": [
-        { "id": "gpt-4.1-mini", "name": "Kilo GPT 4.1 Mini" },
-        { "id": "gpt-5-mini", "name": "Kilo GPT 5 Mini" },
         {
           "id": "gpt-4.1-mini",
           "name": "Kilo GPT 4.1 Mini",
+          "compat": {
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": false
+          }
+        },
+        {
+          "id": "gpt-5-mini",
+          "name": "Kilo GPT 5 Mini"
+        },
+        {
+          "id": "qwen/qwen3.6-plus",
+          "name": "Kilo Qwen 3.6 Plus",
           "compat": {
             "supportsDeveloperRole": false,
             "supportsReasoningEffort": false
