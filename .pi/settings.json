@@ -1,6 +1,4 @@
 {
-  "extensions": ["../extensions"],
-  "prompts": ["../prompts"],
   "systemRules": {
     "path": "../GLOBAL_RULES.md"
   },

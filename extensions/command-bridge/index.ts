@@ -39,7 +39,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { readGlobalSettings } from "../shared/settings.ts";
+import { readSettings } from "../shared/settings.ts";
 
 interface SourceConfig {
 	name: string;
@@ -66,9 +66,9 @@ function expandHome(p: string): string {
 	return p;
 }
 
-function loadSettings(): BridgeSettings {
+function loadSettings(cwd?: string): BridgeSettings {
 	try {
-		const parsed = readGlobalSettings();
+		const { settings: parsed } = readSettings(cwd);
 		const cfg = (parsed as any)?.commandBridge ?? {};
 		return {
 			enabled: cfg.enabled !== false, // default true
@@ -194,10 +194,12 @@ function interpolate(body: string, args: string): string {
 }
 
 export default function (pi: ExtensionAPI) {
-	const settings = loadSettings();
-	if (!settings.enabled) return;
+	let settings: BridgeSettings | null = null;
 
 	pi.on("session_start", (_event, ctx) => {
+		settings = loadSettings(ctx.cwd);
+		if (!settings.enabled) return;
+
 		const discovered: DiscoveredCommand[] = [];
 
 		for (const source of settings.sources) {

@@ -36,7 +36,7 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type BM25Index, buildIndex, search } from "./bm25.ts";
-import { readGlobalSettings } from "../shared/settings.ts";
+import { readSettings } from "../shared/settings.ts";
 
 interface DiscoverySettings {
 	alwaysActive: string[];
@@ -58,9 +58,9 @@ const DEFAULT_ALWAYS_ACTIVE = [
 	"search_tool",
 ];
 
-function loadSettings(): DiscoverySettings {
+function loadSettings(cwd?: string): DiscoverySettings {
 	try {
-		const settings = readGlobalSettings();
+		const { settings } = readSettings(cwd);
 		const cfg = (settings as any)?.toolDiscovery ?? {};
 		return {
 			alwaysActive: Array.isArray(cfg.alwaysActive) ? cfg.alwaysActive : DEFAULT_ALWAYS_ACTIVE,
@@ -111,9 +111,10 @@ function applyDiscoveryMode(pi: ExtensionAPI, settings: DiscoverySettings, ctx?:
 }
 
 export default function (pi: ExtensionAPI) {
-	const settings = loadSettings();
+	let settings: DiscoverySettings = { alwaysActive: DEFAULT_ALWAYS_ACTIVE, limit: 8, minScore: 0 };
 
 	pi.on("session_start", (_event, ctx) => {
+		settings = loadSettings(ctx.cwd);
 		// Build index when session starts (after all extensions registered their tools)
 		activeIndex = buildToolIndex(pi, settings);
 		applyDiscoveryMode(pi, settings, ctx);

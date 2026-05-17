@@ -7,5 +7,21 @@
     "test": "cd extensions && npm test",
     "typecheck": "cd extensions && npm run typecheck",
     "setup-pi-settings": "scripts/setup-pi-settings.sh"
-  }
+  },
+  "description": "<div align=\"center\">",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/altvoratech/recall-pi.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/altvoratech/recall-pi/issues"
+  },
+  "homepage": "https://github.com/altvoratech/recall-pi#readme"
 }

@@ -13,11 +13,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 const DEFAULT_THRESHOLD = 100_000;
 
-import { readGlobalSettings } from "./shared/settings.ts";
+import { readSettings } from "./shared/settings.ts";
 
-function loadThreshold(): number {
+function loadThreshold(cwd?: string): number {
 	try {
-		const settings = readGlobalSettings();
+		const { settings } = readSettings(cwd);
 		const t = (settings as any)?.compaction?.thresholdTokens;
 		if (typeof t === "number" && t > 0) return t;
 	} catch {
@@ -27,7 +27,7 @@ function loadThreshold(): number {
 }
 
 export default function (pi: ExtensionAPI) {
-	const threshold = loadThreshold();
+	let threshold = DEFAULT_THRESHOLD;
 	let previousTokens: number | null | undefined;
 
 	const triggerCompaction = (ctx: ExtensionContext, customInstructions?: string) => {
@@ -44,6 +44,11 @@ export default function (pi: ExtensionAPI) {
 			},
 		});
 	};
+
+	pi.on("session_start", (_event, ctx) => {
+		threshold = loadThreshold(ctx.cwd);
+		previousTokens = undefined;
+	});
 
 	pi.on("turn_end", (_event, ctx) => {
 		const usage = ctx.getContextUsage();

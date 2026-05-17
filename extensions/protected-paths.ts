@@ -26,11 +26,11 @@ const DEFAULT_PROTECTED: string[] = [
 	".pi/agent/models.json",
 ];
 
-import { readGlobalSettings } from "./shared/settings.ts";
+import { readSettings } from "./shared/settings.ts";
 
-function loadExtraProtected(): string[] {
+function loadExtraProtected(cwd?: string): string[] {
 	try {
-		const settings = readGlobalSettings();
+		const { settings } = readSettings(cwd);
 		const extras = (settings as any)?.protectedPaths;
 		if (Array.isArray(extras)) return extras.filter((p): p is string => typeof p === "string");
 	} catch {
@@ -40,7 +40,11 @@ function loadExtraProtected(): string[] {
 }
 
 export default function (pi: ExtensionAPI) {
-	const protectedPaths = [...DEFAULT_PROTECTED, ...loadExtraProtected()];
+	let protectedPaths = [...DEFAULT_PROTECTED];
+
+	pi.on("session_start", (_event, ctx) => {
+		protectedPaths = [...DEFAULT_PROTECTED, ...loadExtraProtected(ctx.cwd)];
+	});
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (event.toolName !== "write" && event.toolName !== "edit") return undefined;

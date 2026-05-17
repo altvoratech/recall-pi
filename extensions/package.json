@@ -20,7 +20,8 @@
       "./command-bridge/index.ts",
       "./compaction-snapshot/index.ts",
       "./jina-index/index.ts",
-      "./tool-discovery/index.ts"
+      "./tool-discovery/index.ts",
+      "./image-generation.ts"
     ]
   },
   "dependencies": {

@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
 
-# Create ~/.pi/agent/settings.json from project .pi/settings.json if not present
+# WARNING: DO NOT USE recall-pi AS GLOBAL PI SETUP.
+#
+# This repo is meant to run as a project (project-local) with `.pi/extensions` and `.pi/prompts`.
+# Installing it as global config can cause confusing behavior across unrelated directories.
+#
+# If you really want a global setup, do it explicitly in your own dotfiles and accept the tradeoffs.
+
 set -euo pipefail
 
-PROJECT_SETTINGS="$(pwd)/.pi/settings.json"
-GLOBAL_DIR="$HOME/.pi/agent"
-GLOBAL_FILE="$GLOBAL_DIR/settings.json"
+cat <<'MSG'
 
-if [ ! -f "$PROJECT_SETTINGS" ]; then
-  echo "Project .pi/settings.json not found: $PROJECT_SETTINGS"
-  exit 1
-fi
+=====================================================================
+  DO NOT USE recall-pi AS GLOBAL PI SETUP
 
-mkdir -p "$GLOBAL_DIR"
+  This script has been disabled on purpose.
 
-if [ -f "$GLOBAL_FILE" ]; then
-  echo "Global settings already exist at $GLOBAL_FILE — leaving untouched"
-  exit 0
-fi
+  Why:
+  - recall-pi is designed to run project-locally
+  - global install affects every cwd and can break expectations
 
-cp "$PROJECT_SETTINGS" "$GLOBAL_FILE"
-chmod 600 "$GLOBAL_FILE"
+  What to do instead:
+  - run Pi from inside this repo:  cd ~/recall-pi && pi
+  - or copy only the specific settings you want into ~/.pi/agent/settings.json
 
-echo "Created $GLOBAL_FILE from project .pi/settings.json"
+=====================================================================
+
+MSG
+
+exit 1

@@ -21,7 +21,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readGlobalSettings } from "./shared/settings.ts";
+import { readSettings } from "./shared/settings.ts";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
@@ -29,9 +29,9 @@ import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-a
 const DEFAULT_PROVIDER = "opencode-go";
 const DEFAULT_MODEL = "deepseek-v4-pro";
 
-function loadConfig(): { provider: string; model: string } {
+function loadConfig(cwd?: string): { provider: string; model: string } {
 	try {
-		const settings = readGlobalSettings();
+		const { settings } = readSettings(cwd);
 		const c = (settings as any)?.compaction ?? {};
 		return {
 			provider: typeof c.summarizerProvider === "string" ? c.summarizerProvider : DEFAULT_PROVIDER,
@@ -85,7 +85,11 @@ Rules:
 Format: structured markdown, scannable, concise.`;
 
 export default function (pi: ExtensionAPI) {
-	const cfg = loadConfig();
+	let cfg = loadConfig();
+
+	pi.on("session_start", (_event, ctx) => {
+		cfg = loadConfig(ctx.cwd);
+	});
 
 	pi.on("session_before_compact", async (event, ctx) => {
 		ctx.ui.notify(`Custom compaction starting (${cfg.provider}/${cfg.model})`, "info");

@@ -11,6 +11,14 @@ type RecallSettings = {
 	bearerToken: string;
 	pythonPath: string;
 	coreDir: string;
+	// for diagnostics
+	sources?: {
+		url?: string;
+		bearerToken?: string;
+		pythonPath?: string;
+		coreDir?: string;
+		projectSettingsPath?: string | null;
+	};
 };
 
 type RecallSearchHit = {
@@ -27,6 +35,11 @@ type RecallSearchHit = {
 const DEFAULT_RECALL_URL = "http://127.0.0.1:18789/sse";
 const DEFAULT_RECALL_CORE_DIR = "/home/g/recall-core";
 const DEFAULT_RECALL_PYTHON = "/home/g/recall-core/.venv/bin/python";
+
+const ENV_URL = "RECALL_URL";
+const ENV_BEARER = "RECALL_BEARER_TOKEN";
+const ENV_PYTHON = "RECALL_PYTHON";
+const ENV_CORE_DIR = "RECALL_CORE_DIR";
 const CLIENT_SCRIPT = fileURLToPath(new URL("./recall_mcp_client.py", import.meta.url));
 const LOGS_DIR = path.join(path.dirname(CLIENT_SCRIPT), "logs");
 
@@ -83,32 +96,92 @@ function normalizeRecallUrl(value: unknown): string {
 	return `${raw.replace(/\/+$/, "")}/sse`;
 }
 
+function isLoopbackHost(host: string): boolean {
+	const h = host.toLowerCase();
+	return h === "127.0.0.1" || h === "localhost" || h === "::1";
+}
+
+function validateRecallUrl(url: string): void {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new Error(`Invalid recall url: ${url}`);
+	}
+	// If recall is exposed beyond loopback, require https.
+	if (parsed.protocol === "http:" && !isLoopbackHost(parsed.hostname)) {
+		throw new Error(
+			`Refusing insecure recall url over plain http for non-loopback host (${parsed.hostname}). Use https:// or bind to 127.0.0.1.`,
+		);
+	}
+}
+
+function readEnvRecall(): Record<string, unknown> {
+	const env = process.env;
+	const out: Record<string, unknown> = {};
+	if (typeof env[ENV_URL] === "string" && env[ENV_URL]!.trim()) out.url = env[ENV_URL]!.trim();
+	if (typeof env[ENV_BEARER] === "string" && env[ENV_BEARER]!.trim()) out.bearerToken = env[ENV_BEARER]!.trim();
+	if (typeof env[ENV_PYTHON] === "string" && env[ENV_PYTHON]!.trim()) out.pythonPath = env[ENV_PYTHON]!.trim();
+	if (typeof env[ENV_CORE_DIR] === "string" && env[ENV_CORE_DIR]!.trim()) out.coreDir = env[ENV_CORE_DIR]!.trim();
+	return out;
+}
+
 function getRecallSettings(cwd: string): RecallSettings {
 	const globalSettingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
 	const projectSettingsPath = findNearestProjectSettings(cwd);
 	const globalSettings = readJsonIfExists(globalSettingsPath) ?? {};
 	const projectSettings = projectSettingsPath ? readJsonIfExists(projectSettingsPath) ?? {} : {};
-	const mergedRecall = {
-		...((globalSettings.recall as Record<string, unknown> | undefined) ?? {}),
-		...((projectSettings.recall as Record<string, unknown> | undefined) ?? {}),
+	const envRecall = readEnvRecall();
+
+	// Precedence (first wins): env > project > global > defaults
+	const globalRecall = ((globalSettings.recall as Record<string, unknown> | undefined) ?? {});
+	const projectRecall = ((projectSettings.recall as Record<string, unknown> | undefined) ?? {});
+
+	const pick = (key: string) => {
+		const v = (envRecall as any)[key];
+		if (typeof v === "string" && v.trim()) return { value: v.trim(), source: "env" as const };
+		const pv = (projectRecall as any)[key];
+		if (typeof pv === "string" && pv.trim()) return { value: pv.trim(), source: "project" as const };
+		const gv = (globalRecall as any)[key];
+		if (typeof gv === "string" && gv.trim()) return { value: gv.trim(), source: "global" as const };
+		return { value: "", source: "default" as const };
 	};
 
-	const bearerToken = typeof mergedRecall.bearerToken === "string" ? mergedRecall.bearerToken.trim() : "";
+	const bearer = pick("bearerToken");
+	const bearerToken = bearer.value;
 	if (!bearerToken) {
-		throw new Error('Recall bearer token missing. Configure settings.json with { "recall": { "bearerToken": "..." } }.');
+		throw new Error(
+			`Recall bearer token missing. Set ${ENV_BEARER} or configure settings.json with { "recall": { "bearerToken": "..." } } (project or global).`,
+		);
 	}
 
+	const urlPick = (() => {
+		const url = pick("url");
+		if (url.value) return url;
+		const baseUrl = pick("baseUrl");
+		if (baseUrl.value) return baseUrl;
+		const sseUrl = pick("sseUrl");
+		if (sseUrl.value) return sseUrl;
+		return { value: DEFAULT_RECALL_URL, source: "default" as const };
+	})();
+	const url = normalizeRecallUrl(urlPick.value);
+	validateRecallUrl(url);
+
+	const pyPick = pick("pythonPath");
+	const corePick = pick("coreDir");
+
 	return {
-		url: normalizeRecallUrl(mergedRecall.url ?? mergedRecall.baseUrl ?? mergedRecall.sseUrl),
+		url,
 		bearerToken,
-		pythonPath:
-			typeof mergedRecall.pythonPath === "string" && mergedRecall.pythonPath.trim()
-				? mergedRecall.pythonPath.trim()
-				: DEFAULT_RECALL_PYTHON,
-		coreDir:
-			typeof mergedRecall.coreDir === "string" && mergedRecall.coreDir.trim()
-				? mergedRecall.coreDir.trim()
-				: DEFAULT_RECALL_CORE_DIR,
+		pythonPath: pyPick.value || DEFAULT_RECALL_PYTHON,
+		coreDir: corePick.value || DEFAULT_RECALL_CORE_DIR,
+		sources: {
+			url: urlPick.source,
+			bearerToken: bearer.source,
+			pythonPath: pyPick.source,
+			coreDir: corePick.source,
+			projectSettingsPath,
+		},
 	};
 }
 
@@ -200,9 +273,38 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus("recall-context", undefined);
 	});
 
+	pi.registerCommand("recall-doctor", {
+		description: "Diagnostica configuração do Recall (precedência env/projeto/global) e valida URL",
+		handler: async (_args, ctx) => {
+			try {
+				const settings = getRecallSettings(ctx.cwd);
+				const s = settings.sources;
+				const lines = [
+					"Recall doctor:\n",
+					`cwd: ${ctx.cwd}`,
+					`project settings: ${s?.projectSettingsPath ?? "(none found)"}`,
+					"",
+					`url: ${settings.url}   (source: ${s?.url ?? "?"})`,
+					`bearerToken: ${settings.bearerToken ? "(set)" : "(missing)"}   (source: ${s?.bearerToken ?? "?"})`,
+					`pythonPath: ${settings.pythonPath}   (source: ${s?.pythonPath ?? "?"})`,
+					`coreDir: ${settings.coreDir}   (source: ${s?.coreDir ?? "?"})`,
+					"",
+					"Env vars suportadas:",
+					`- ${ENV_URL}, ${ENV_BEARER}, ${ENV_PYTHON}, ${ENV_CORE_DIR}`,
+				].join("\n");
+				ctx.ui.notify(lines, "info");
+			} catch (e) {
+				ctx.ui.notify(`Recall doctor error: ${(e as Error).message}`, "error");
+			}
+		},
+	});
+
 	pi.registerCommand("recall-context", {
 		description: "Liga/desliga a injeção automática do Recall no prompt",
 		handler: async (args, ctx) => {
+			// NOTE: the context toggle state is persisted into the session tree via a custom entry.
+			// This makes the behavior stable across compactions.
+
 			const value = args.trim().toLowerCase();
 			if (value === "on" || value === "enable") {
 				recallContextEnabled = true;

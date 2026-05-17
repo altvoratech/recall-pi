@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { type AgentConfig, discoverAgents } from "./subagent-env/agents.ts";
 import { classifierWordToTier, lexicalComplexityTier, normalizeText, type ComplexityTier } from "./shared/intent.ts";
-import { readGlobalSettings } from "./shared/settings.ts";
+import { readSettings } from "./shared/settings.ts";
 
 type Tier = ComplexityTier;
 
@@ -25,7 +25,7 @@ const SETTINGS_PATH = join(homedir(), ".pi/agent/settings.json");
 
 const DEFAULT_PROVIDER = "opencode-go";
 const DEFAULT_MODEL = "qwen3.6-plus";
-const CLASSIFIER_TIMEOUT_MS = 2500;
+const CLASSIFIER_TIMEOUT_MS = 8000;
 const CACHE_TTL_MS = 5 * 60_000;
 
 const CLASSIFIER_SYSTEM = [
@@ -45,8 +45,8 @@ function readJson<T>(path: string): T | null {
 	}
 }
 
-function resolveProviderModel(): { provider: string; model: string } {
-	const settings = readGlobalSettings() ?? {};
+function resolveProviderModel(ctx?: ExtensionContext): { provider: string; model: string } {
+	const { settings } = readSettings(ctx?.cwd);
 	const policy = (settings as any).subagentPolicy ?? {};
 	return {
 		provider: typeof policy.classifierProvider === "string" ? policy.classifierProvider : DEFAULT_PROVIDER,
@@ -115,9 +115,11 @@ function reportClassifierFailure(ctx: ExtensionContext | undefined, message: str
 	const hasUiSurface = Boolean(ctx?.hasUI && (ctx as any)?.ui);
 	const ui = hasUiSurface ? (ctx as any).ui : undefined;
 	const theme = ui?.theme;
-	const setStatus = typeof ui?.setStatus === "function" ? (ui.setStatus as (k: string, v: string | undefined) => void) : undefined;
+	const setStatus =
+		typeof ui?.setStatus === "function" ? (ui.setStatus as (k: string, v: string | undefined) => void) : undefined;
 	const notify = typeof ui?.notify === "function" ? (ui.notify as (t: string, tone: any) => void) : undefined;
-	const fg = typeof theme?.fg === "function" ? (theme.fg as (c: any, t: string) => string) : undefined;
+	// theme.fg depends on `this` (uses theme.fgColors). Bind it.
+	const fg = typeof theme?.fg === "function" ? (theme.fg.bind(theme) as (c: any, t: string) => string) : undefined;
 
 	if (hasUiSurface && fg && setStatus) {
 		if (normalized) {
@@ -126,7 +128,8 @@ function reportClassifierFailure(ctx: ExtensionContext | undefined, message: str
 				notify(`Subagent classifier failed — auto-delegation degraded.\n${normalized}`, "error");
 			}
 		} else {
-			setStatus("subagent-classifier", undefined);
+			// Healthy classifier: show a subtle pill so it's obvious auto-delegation is actually online.
+			setStatus("subagent-classifier", fg("success", "sub:auto ✓"));
 		}
 		return;
 	}
@@ -156,7 +159,7 @@ async function classify(prompt: string, ctx?: ExtensionContext): Promise<Tier> {
 	const hit = cache.get(key);
 	if (hit && Date.now() - hit.ts < CACHE_TTL_MS) return hit.tier;
 
-	const { provider, model: modelId } = resolveProviderModel();
+	const { provider, model: modelId } = resolveProviderModel(ctx);
 	const creds = await resolveClassifierCreds(provider, modelId, ctx);
 	// If the classifier can't be used (missing creds / registry), fall back to a
 	// conservative lexical heuristic so auto-delegation still works for obvious cases.
@@ -166,7 +169,8 @@ async function classify(prompt: string, ctx?: ExtensionContext): Promise<Tier> {
 	const timer = setTimeout(() => ctl.abort(), CLASSIFIER_TIMEOUT_MS);
 
 	try {
-		const r = await fetch(`${creds.baseUrl}/v1/chat/completions`, {
+		const baseUrl = creds.baseUrl.replace(/\/+$/, "");
+		const r = await fetch(`${baseUrl}/v1/chat/completions`, {
 			method: "POST",
 			headers: {
 				"content-type": "application/json",
@@ -263,6 +267,12 @@ function discoverForPolicy(cwd: string): AgentConfig[] {
 }
 
 export default function (pi: ExtensionAPI) {
+	pi.on("session_start", async (_event, ctx) => {
+		// Make it obvious the policy is loaded even before the first classification runs.
+		if (!ctx.hasUI) return;
+		const fg = ctx.ui.theme?.fg?.bind(ctx.ui.theme);
+		if (fg) ctx.ui.setStatus("subagent-classifier", fg("muted", "sub:auto …"));
+	});
 	pi.on("input", async (event, ctx) => {
 		if (event.source === "extension") return { action: "continue" };
 		const text = event.text?.trim() ?? "";

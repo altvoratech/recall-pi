@@ -20,16 +20,36 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { readGlobalSettings } from "./shared/settings.ts";
+import * as path from "node:path";
+import { readProjectSettings, readSettings } from "./shared/settings.ts";
 
 const DEFAULT_PATH = join(homedir(), ".pi/agent/GLOBAL_RULES.md");
 
-function resolvePath(): string {
+function resolveConfiguredPath(raw: string, baseDir: string): string {
+	const trimmed = raw.trim();
+	if (!trimmed) return DEFAULT_PATH;
+	if (trimmed.startsWith("~")) return join(homedir(), trimmed.slice(1));
+	if (path.isAbsolute(trimmed)) return trimmed;
+	// Relative paths in project settings resolve relative to the .pi/ directory (per Pi docs).
+	return path.resolve(baseDir, trimmed);
+}
+
+function resolvePath(cwd: string): string {
 	try {
-		const settings = readGlobalSettings();
-		const p = (settings as any)?.systemRules?.path;
+		// Respect Pi's settings precedence: project overrides global.
+		const project = readProjectSettings(cwd);
+		const projectPath = (project.settings as any)?.systemRules?.path;
+		if (typeof projectPath === "string" && project.path) {
+			return resolveConfiguredPath(projectPath, path.dirname(project.path));
+		}
+
+		const merged = readSettings(cwd).settings;
+		const p = (merged as any)?.systemRules?.path;
 		if (typeof p === "string" && p.length > 0) {
-			return p.startsWith("~") ? join(homedir(), p.slice(1)) : p;
+			// Global settings paths resolve relative to ~/.pi/agent (Pi docs). If user put a relative path here,
+			// resolve it relative to that directory.
+			const baseDir = join(homedir(), ".pi/agent");
+			return resolveConfiguredPath(p, baseDir);
 		}
 	} catch {
 		/* fall through */
@@ -37,19 +57,19 @@ function resolvePath(): string {
 	return DEFAULT_PATH;
 }
 
-function loadRules(): string | null {
-	const path = resolvePath();
-	if (!existsSync(path)) return null;
+function loadRules(cwd: string): string | null {
+	const rulesPath = resolvePath(cwd);
+	if (!existsSync(rulesPath)) return null;
 	try {
-		return readFileSync(path, "utf8").trim();
+		return readFileSync(rulesPath, "utf8").trim();
 	} catch {
 		return null;
 	}
 }
 
 export default function (pi: ExtensionAPI) {
-	pi.on("before_agent_start", async (event) => {
-		const rules = loadRules();
+	pi.on("before_agent_start", async (event, ctx) => {
+		const rules = loadRules(ctx.cwd);
 		if (!rules) return undefined;
 
 		const base = event.systemPrompt?.trim() ?? "";

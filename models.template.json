@@ -1,0 +1,22 @@
+{
+  "providers": {
+    "kilo": {
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "api": "openai-completions",
+      "apiKey": "",
+      "authHeader": true,
+      "models": [
+        { "id": "gpt-4.1-mini", "name": "Kilo GPT 4.1 Mini" },
+        { "id": "gpt-5-mini", "name": "Kilo GPT 5 Mini" },
+        {
+          "id": "gpt-4.1-mini",
+          "name": "Kilo GPT 4.1 Mini",
+          "compat": {
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": false
+          }
+        }
+      ]
+    }
+  }
+}
