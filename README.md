@@ -16,11 +16,11 @@
 
 # recall-pi
 
-Setup do Pi focado em **integração com recall MCP**, **orquestração de subagentes** e extensões de produtividade. Fica em cima do [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) sem fork: só configuração e extensões.
+Setup do Pi focado em **integração com recall MCP**, **subagentes**, **skills project-local** e **guard rails operacionais**. Fica em cima do [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) sem fork: só configuração, manifesto `pi` no `package.json` e extensões em `.pi/extensions/`.
 
 Pode ser usado em dois modos:
 - **project-local** (rodando dentro do repo), ou
-- **package global do Pi** (via `~/.pi/agent/settings.json` em `packages`).
+- **package global do Pi** (via `packages` em `~/.pi/agent/settings.json`).
 
 [![License](https://img.shields.io/badge/license-MIT-58A6FF?style=flat&labelColor=222222)](#license)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat&labelColor=222222&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -29,7 +29,7 @@ Pode ser usado em dois modos:
 
 ## Architecture
 
-recall-pi is the **terminal-side client** for the recall-core memory ecosystem. The engine (chunking, embedding, hybrid search, persistence) lives in `recall-core`. Pi consumes it through MCP and surfaces memory inline for the operator.
+recall-pi é o **cliente terminal-side** do ecossistema recall-core. O engine de memória (chunking, embeddings, hybrid search, persistência) vive em `recall-core`. O Pi consome isso via MCP e também usa seus próprios artefatos locais de observabilidade e operação.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -59,227 +59,258 @@ recall-pi is the **terminal-side client** for the recall-core memory ecosystem. 
          └─────────┘ └─────────┘ └──────────┘
 ```
 
-**Pi's job:** auto-inject relevant hits on prompt, expose `recall_*` tools to the LLM, run subagents with isolated context that share the same recall backend.
+**Papel do Pi:** injetar contexto relevante, expor `recall_*` tools, orquestrar subagentes com contexto isolado, proteger mutações sensíveis, e gravar traces estruturados por run.
 
 ## Structure
 
 ```
 recall-pi/
+├── .agents/
+│   └── skills/          # skills no padrão Agent Skills
 ├── .pi/
-│   ├── extensions/       # TypeScript Pi extensions (single source of truth)
-│   ├── prompts/          # slash command templates
-│   ├── scripts/          # helper scripts (models sync, setup notes)
-│   └── settings.json     # project-local Pi settings
-├── models.template.json  # template for ~/.pi/agent/models.json (kilo provider)
-└── GLOBAL_RULES.md       # operator rules injected at prompt tail
+│   ├── extensions/      # extensões TypeScript do Pi
+│   ├── harness/         # traces gerados em runtime (.pi/harness/runs)
+│   ├── prompts/         # templates /comando
+│   ├── scripts/         # helpers
+│   └── settings.json    # settings do projeto
+├── docs/
+├── GLOBAL_RULES.md
+├── models.template.json # template para ~/.pi/agent/models.json (provider kilo)
+└── package.json         # manifesto do pacote Pi (extensions/skills/prompts)
 ```
 
-## Extension pack (resumo)
+## Package manifest (`package.json`)
+
+O projeto declara explicitamente seus diretórios Pi no bloco `pi`:
+
+```json
+{
+  "pi": {
+    "extensions": ["./.pi/extensions"],
+    "skills": ["./.agents/skills", "./.pi/skills"],
+    "prompts": ["./.pi/prompts"]
+  }
+}
+```
+
+Isso é importante porque o Pi pode rodar como binário global; a descoberta de skills/prompts/extensões deve vir do manifesto do pacote, não de suposições sobre o cwd do processo.
+
+## Extension pack
 
 Principais extensões em `.pi/extensions/`:
-- `permission-gate.ts` — intercepta comandos bash sensíveis e abre modal de confirmação/sudo
+- `permission-gate.ts` — modal de confirmação para bash sensível/privilegiado; bloqueio de `write`/`edit` em `.recall` e `.git/`; comando `/abort`
+- `protected-paths.ts` — confirmação para writes/edits em paths protegidos (`.env`, `node_modules/`, configs do Pi, etc.)
 - `recall-tools/` — integração com recall via MCP local (`recall_mcp_load`, `recall_save`)
 - `jina-index/` — indexação e busca semântica local de docs via Jina API
-- `compaction-snapshot/` — persiste snapshots de compaction no disco
+- `custom-compaction.ts` — substitui o resumo padrão por summary cumulativo via LLM no hook `session_before_compact`
+- `compaction-snapshot/` — persiste snapshots de compaction no disco no evento `session_compact`
+- `trigger-compact.ts` — expõe `/trigger-compact` para compaction manual
 - `tool-discovery/` — índice BM25 de tools + `search_tool`
-- `command-bridge/` — expõe comandos de `~/.claude/`, `~/.codex/`, `~/.opencode/` no Pi
-- `subagent-env/` + `subagent-policy.ts` — ambiente e roteamento de subagentes
-- `status-line.ts` / `working-indicator.ts` / `custom-footer.ts` — UX e status da UI
+- `command-bridge/` — expõe slash commands de `~/.claude/`, `~/.codex/`, `~/.opencode/`
+- `subagent-env/` + `subagent-policy.ts` — ambiente, execução e roteamento de subagentes
+- `trace-recorder.ts` — tracing por run com spans de tool, artefatos e tokens (+ `/trace-last`, `/trace-list`)
+- `status-line.ts` / `working-indicator.ts` / `custom-footer.ts` — UX da UI
 
-Comportamento de memória/identidade:
-- Recall lê configuração global (`~/.pi/agent/settings.json`) e env vars.
-- Injeção de contexto usa busca global (cross-project) quando aplicável.
-- Identidade do projeto vem de `.recall/project.json` no cwd.
+## Skills
 
-Artefatos locais importantes (não versionar):
-- `.firecrawl/`
-- `.pi/extensions/recall-tools/logs/`
-- `.pi/extensions/jina-index/_indexes/`
-- `SESSION-NOTES-*.md`
-- `RECALL_CORE_ANALYSIS.md`
+Skills do projeto podem viver em:
+- `.agents/skills/`
+- `.pi/skills/`
 
-Segurança:
-- Nunca commitar tokens/senhas/chaves.
-- `recall-tools` sobrescreve `logs/latest.json` e evita histórico por prompt.
-- Preserve `.recall/` no projeto (UUID/identidade usada no recall).
+A descoberta é feita via `package.json` (`pi.skills`). Exemplo atual:
+- `.agents/skills/find-skills/SKILL.md`
 
-Observabilidade de orquestração:
-- Eventos críticos são gravados em `logs/system-log.jsonl`.
-- `source` agora é segmentado:
-  - `subagent-policy` (lexical/injeção)
-  - `subagent:tool` (início/fim do tool)
-  - `subagent:runner` (spawn e resultado do processo)
-  - `subagent:usage` (prova de uso real de subagent)
-- Rotação automática habilitada: `5 MB` por arquivo, mantendo até `5` históricos (`logs/system-log.1.jsonl` ... `.5`).
-- Para acompanhar em tempo real:
-  ```bash
-  tail -f logs/system-log.jsonl
-  ```
-- Para ver só uso real de subagent:
-  ```bash
-  grep '"source":"subagent:usage"' logs/system-log.jsonl | tail -n 20
-  ```
+Após criar ou mover uma skill, rode `/reload`.
+
+## Trace recorder
+
+Cada run do agente principal ou de subagente gera um trace estruturado em:
+
+```text
+recall-pi/.pi/harness/runs/
+├── index.jsonl
+├── main-<session>-<timestamp>/
+│   ├── events.jsonl
+│   ├── trace.json
+│   └── trace-main.json
+└── sub-<session>-<timestamp>/
+    └── ...
+```
+
+Importante:
+- o trace recorder grava na **raiz do pacote `recall-pi`**, derivada do próprio arquivo da extensão
+- ele **não** usa o cwd do processo global do Pi para decidir onde salvar
+- isso evita traces acidentalmente irem para `C:\Users\...\Documents\.pi\...`
+
+Cada `trace.json` contém:
+- modelo, fase e duração
+- `phase: "main"` para o agente principal e `phase: "subagent"` para runs delegados
+- tool spans com `args_summary`
+- `artifact_refs` (arquivos tocados)
+- tokens agregados
+
+Comandos:
+- `/trace-last`
+- `/trace-list`
+
+## Compaction
+
+Comportamento atual:
+- **auto-compaction por threshold** é responsabilidade do runtime do **Pi**
+- `custom-compaction.ts` apenas customiza **como o resumo é gerado**
+- `trigger-compact.ts` expõe apenas o comando manual `/trigger-compact`
+- a extensão **não** dispara mais `ctx.compact()` automaticamente em `turn_end`
+
+Isso evita usar o fluxo de compaction manual como shim de auto-compaction, o que podia interferir no ciclo normal do agente principal.
+
+## Subagents
+
+Subagentes bundled:
+- `scout` → `kilo/gpt-4.1-mini`
+- `planner` → `openai-codex/gpt-5.4`
+- `worker` → `kilo/gpt-5-mini`
+- `reviewer` → `kilo/deepseek/deepseek-v4-flash`
+- `debugger` → `kilo/qwen/qwen3.6-plus`
+
+### Comportamento operacional
+
+- a política de auto-delegação usa **heurística léxica** (zero tokens)
+- o agente desta sessão é o **main**; subagentes aparecem como runs separados no harness
+- o runner de subagentes aplica **timeout de 180s por subagente**
+- `/abort` ativa um **abort lock**:
+  - aborta subagentes em execução
+  - bloqueia novas chamadas de `subagent`
+  - bloqueia mutações `bash` / `write` / `edit`
+  - o lock é limpo com `/reload`
+
+### System log
+
+Eventos críticos são gravados em `logs/system-log.jsonl`.
+
+`source` segmentado:
+- `trace-recorder`
+- `subagent-policy`
+- `subagent:tool`
+- `subagent:runner`
+- `subagent:usage`
+
+Há eventos específicos para timeout/abort em subagentes, úteis para depuração de travamentos.
 
 ## Install
 
 1. Clone e instale:
    ```bash
    git clone <repo-url> ~/recall-pi
-   cd ~/recall-pi && npm install
+   cd ~/recall-pi
+   npm install
    ```
 
-2. O projeto já segue o padrão `.pi/`:
-   - extensões em `.pi/extensions/`
-   - prompt templates em `.pi/prompts/`
-   - scripts em `.pi/scripts/`
+2. Escolha o modo:
+   - **project-local:** rode o Pi dentro do repo
+   - **package global:** adicione o repo em `~/.pi/agent/settings.json` → `packages`
+     ```bash
+     npm run setup-pi-settings
+     ```
 
-3. Escolha o modo de uso:
-   - **Project-local:** rode o Pi dentro do repo.
-   - **Package global:** adicione o caminho do repo em `~/.pi/agent/settings.json` → `packages`.
-     - helper automático:
-       ```bash
-       npm run setup-pi-settings
-       ```
+3. Configure modelos do provider kilo se necessário:
+   ```bash
+   cp models.template.json ~/.pi/agent/models.json
+   # preencha apiKey
+   ```
 
-4. Rode `/reload` no Pi.
+4. Rode `/reload`.
 
 ## Test
 
 ```bash
-npm test          # unit tests (lexical heuristic, settings parser, permission predicates)
-npm run typecheck # tsc strict
+npm run typecheck
+npm test
 ```
+
+Cobertura atual de testes inclui:
+- heurística léxica de subagentes
+- registro de tools/extensions
+- smoke test dos subagentes bundled via runner fake
+- execução de agente project-local
+- BM25 do `tool-discovery`
 
 ## Image generation (Pi 0.74.1+)
 
-Esta configuração inclui a tool `image_generate` (extensão `image-generation.ts`) para gerar imagens via **OpenRouter**.
+A configuração inclui `image_generate` via OpenRouter.
 
-### Requisitos
-
-- Defina `OPENROUTER_API_KEY` no ambiente (recomendado):
+Requisito:
 
 ```bash
 export OPENROUTER_API_KEY=...
 ```
 
-### Uso
-
-- `/image <prompt>` (template) — chama `image_generate` com o modelo default `google/gemini-2.5-flash-image`.
-- Tool direta: `image_generate({ model, prompt, count?, size?, inputImageBase64?, inputImageMimeType? })`.
+Uso:
+- `/image <prompt>`
+- tool direta `image_generate(...)`
 
 ## Provider diagnostics
 
-- `/provider-doctor` — mostra status do provider/model atual e faz probes best-effort de:
-  - Together (built-in provider do Pi 0.74.1)
-  - OpenRouter env (`OPENROUTER_API_KEY`)
-
-Dica: se Together estiver "MISSING", rode `/login` e selecione Together.
+- `/provider-doctor` — mostra status do provider/model atual e faz probes best-effort
 
 ## Models & providers
 
-Os subagentes usam modelos de dois providers. Ambos precisam estar disponíveis:
-
 ### Kilo (custom — requer `models.json`)
 
-Copie `models.template.json` para `~/.pi/agent/models.json` e preencha `apiKey`:
-
-```bash
-cp models.template.json ~/.pi/agent/models.json
-# Edite ~/.pi/agent/models.json e defina apiKey
-```
+Copie `models.template.json` para `~/.pi/agent/models.json` e preencha `apiKey`.
 
 Modelos registrados:
+
 | id | usado por |
 |---|---|
 | `gpt-4.1-mini` | scout |
 | `gpt-5-mini` | worker |
+| `deepseek/deepseek-v4-flash` | reviewer |
 | `qwen/qwen3.6-plus` | debugger |
-
-### OpenRouter (built-in — requer `OPENROUTER_API_KEY`)
-
-Provider built-in do Pi. Modelos free não consomem créditos:
-
-| id | usado por |
-|---|---|
-| `deepseek/deepseek-v4-flash:free` | reviewer |
 
 ### OpenAI Codex (built-in — requer `/login`)
 
-Provider built-in do Pi. Autentique via OAuth:
-
-```
+```text
 /login
-# Selecione openai-codex e siga o fluxo OAuth no browser
+# Selecione openai-codex e siga o fluxo OAuth
 ```
 
-Modelos usados:
 | id | usado por |
 |---|---|
 | `gpt-5.4` | planner |
 
-### Nota sobre subagentes
+## Security summary
 
-A política de auto-delegação usa **heurística léxica** (zero tokens, zero latência).
-As chaves antigas `subagentPolicy.classifierProvider` / `classifierModel` / `classifierTimeoutMs` em `.pi/settings.json` não são mais necessárias e podem ser removidas.
-
-Os modelos dos subagentes são definidos no frontmatter de cada `.md` em `.pi/extensions/subagent-env/agents/`. Para trocar o modelo de um agente, edite o campo `model:` no arquivo correspondente e garanta que o provider/modelo existe no `models.json`.
+- não commitar tokens/senhas/chaves
+- `.recall/project.json` é a identidade do projeto no recall
+- `permission-gate` bloqueia exclusão shell de `.recall` e bloqueia `write`/`edit` em `.recall` e `.git/`
+- `protected-paths` pede confirmação para outros paths sensíveis
+- `recall-tools` evita histórico por prompt em logs locais
 
 ## Roadmap
 
-> **Architectural turn (post-V1):** recall-pi is being repositioned from "MCP client like any other" to **privileged client embedded inside recall-core**. External clients (Claude Code, opencode, etc) keep talking to the MCP server. recall-pi imports `core.*` directly — no MCP roundtrip, no public API surface limits. This is the product moat.
+> **Architectural turn (post-V1):** recall-pi está sendo reposicionado de “cliente MCP qualquer” para cliente privilegiado do ecossistema recall-core. Clientes externos continuam falando com MCP; recall-pi ganha a melhor ergonomia operacional.
 
-### V1 — current (standalone repo, MCP client)
-- Extensions packaged in dedicated repo
-- Subagent orchestration (scout / planner / worker / reviewer)
-- Lexical heuristic for auto-delegation (zero tokens)
-- Global rules injected at prompt tail (authoritative over project AGENTS.md)
-- Auto-compaction at token threshold + Gemini-based summarizer
-- Custom 3-line footer with token/cost/context stats
-- Permission gate with sudo password modal
-- Protected paths confirmation
-- Recall MCP client (**Python subprocess — legacy, will be replaced by direct imports in V2**)
+### V1 — atual
+- extensões em `.pi/extensions`
+- skills declaradas no `package.json`
+- subagent orchestration com heuristic routing
+- trace recorder em `.pi/harness/runs`
+- timeout de subagente + `/abort`
+- permission gate + protected paths
+- integração recall via MCP local
 
-### V2 — integrate into recall-core monorepo
-Move recall-pi into `recall-core/clients/pi/` (or equivalent). Pi extensions import `core.retrieval`, `core.embeddings`, `core.project` directly via embedded Python kernel (eval-tool style).
+### V2 — integração mais profunda com recall-core
+- chamadas diretas a módulos do core
+- menor latência
+- mais superfície interna de debug/metrics
 
-- `recall-tools` calls `core.retrieval.hybrid_search` in-process — no HTTP, no SSE parsing
-- Project identity via `core.project.load_project` reused directly (the old `core.project` import — but now legitimate, not a leak)
-- Access to **internal APIs** that MCP doesn't expose: rerank tuning, embedding inspection, metrics, raw substrate debug
-- **Result:** μs-level latency, full surface area, recall-pi co-evolves with core
-- **For external clients:** MCP server stays as the public, stable, abstract contract
-
-### V3+ — full ecosystem alignment
-Tracking the broader recall-core roadmap (engine-side). recall-pi gets first access:
-
-- [ ] **Re-ranking** — `core/cross_encoder.py` rerank step after hybrid_search (Pi can tune live)
-- [ ] **DOCS layer** — zread + Jina embeddings as a parallel index for static project knowledge
-- [ ] **RAW substrate** — raw log/event capture as another retrievable layer
-- [ ] **Layer routing** — agent decides which index to query per intent
-
-When core ships those, Pi consumes the new modules via import. Other MCP clients get a subset via new MCP tools (`recall_docs_load`, `recall_raw_search`, etc) — Pi gets the full surface.
-
-### V4 — operator UX polish
-- Auto-save proposal on meaningful `agent_end`
-- Cross-project hit filter UI (score threshold, project allow/blocklist)
-- Save preview before commit (review diff of `SessionDelta` before sending)
-- Multi-backend mirroring (Postgres + SQLite parallel save for redundancy)
-- Pi as the **official REPL for recall-core development** — debugging, query exploration, embedding inspection
+### V3+ — ecossistema
+- rerank tuning
+- docs layer / raw substrate
+- roteamento entre camadas de memória
 
 ---
 
-## Access tiers (post-V2)
+## License
 
-| Capability | recall-pi (internal) | MCP clients (external: Claude Code, opencode, ...) |
-|---|---|---|
-| `recall_search` / `recall_save` | ✅ direct call | ✅ via MCP |
-| `recall_get_schema` | ✅ direct | ✅ via MCP |
-| `hybrid_search` tuning (k, weights, filters) | ✅ full control | ❌ frozen behind MCP defaults |
-| Embedding inspection / nearest-neighbor debug | ✅ | ❌ |
-| Re-rank tuning (cross-encoder live) | ✅ | ❌ |
-| Internal metrics, RAW substrate access | ✅ | ❌ |
-| Latency | μs (in-process) | ms (HTTP roundtrip) |
-| API stability | breaks with core | stable contract |
-
----
-
-> **Philosophy:** recall-pi is the **power-user seat inside the cockpit**. MCP is the **passenger entrance**. Both have their place — Pi for those building the system, MCP for those consuming it.
+ISC

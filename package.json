@@ -25,6 +25,10 @@
     "extensions": [
       "./.pi/extensions"
     ],
+    "skills": [
+      "./.agents/skills",
+      "./.pi/skills"
+    ],
     "prompts": [
       "./.pi/prompts"
     ]

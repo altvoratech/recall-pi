@@ -1,90 +1,138 @@
 # Security & Operations Notes
 
-This file documents non-obvious security-sensitive behavior in recall-pi and how to operate it safely. It complements `README.md` and `GLOBAL_RULES.md`.
+Este documento cobre o comportamento real de segurança/operabilidade do `recall-pi`.
 
 ## Threat model (in scope)
 
-- An adversarial LLM response or prompt-injected tool result that tries to get the agent to run privileged or destructive shell commands.
-- Accidental loss of the `.recall/project.json` UUID, which is the only way to read sessions saved against that project on the local SQLite/Postgres backends.
-- Credential leakage from world-readable `~/.pi/agent/settings.json` (bearer tokens, model API keys).
+- Resposta adversarial do LLM tentando disparar shell privilegiado ou destrutivo.
+- Escrita acidental em paths sensíveis (`.git/`, `.recall/`, configs do Pi, `.env`, `node_modules/`).
+- Subagentes travados em chamadas lentas de provider.
+- Perda de `.recall/project.json`, que quebra a identidade do projeto no recall.
 
-Out of scope: kernel-level isolation, defenses against a malicious operator with root, supply-chain attacks on `pi-coding-agent` itself.
+Fora de escopo: isolamento kernel-level, operador malicioso com root, supply-chain do Pi.
 
 ## Credentials & configuration
 
-Recall configuration resolves in this order (first wins):
+Recall resolve configuração nesta ordem:
 
-1. Environment variables — `RECALL_URL`, `RECALL_BEARER_TOKEN`, `RECALL_PYTHON`, `RECALL_CORE_DIR`
-2. Project settings — `<cwd>/.pi/settings.json`
-3. Global settings — `~/.pi/agent/settings.json`
-4. Compiled-in defaults (loopback URL, `~/recall-core` paths)
+1. env vars (`RECALL_URL`, `RECALL_BEARER_TOKEN`, `RECALL_PYTHON`, `RECALL_CORE_DIR`)
+2. `.pi/settings.json` do projeto
+3. `~/.pi/agent/settings.json`
+4. defaults
 
-Recommended posture:
+Postura recomendada:
+- prefira env vars para tokens
+- use `chmod 600` em arquivos sensíveis do diretório `~/.pi/agent/`
+- não commite tokens em `settings.json` ou `models.json`
 
-- Keep `bearerToken` out of any settings file checked into git. Prefer the env var, or a settings file with `chmod 600`.
-- If the recall MCP is exposed beyond loopback, use `https://`. The settings parser rejects plain `http://` for non-loopback hosts and the agent will refuse to start in that mode.
-- Rotate the bearer token any time the settings file is shared (e.g. screen recording, paste in chat).
+## Permission model
 
-## Audit log
+### `permission-gate.ts`
 
-The permission gate writes a JSONL audit trail to `~/.pi/agent/audit.log` (mode `0600`). One line per decision:
+Proteções atuais:
+- abre modal para bash sensível/privilegiado
+- bloqueia exclusão shell de `.recall`
+- bloqueia `write`/`edit` em `.recall` e `.git/`
+- expõe `/abort`
 
-- `permission_gate.allow` — operator approved execution (`action: "execute"` or `"sudo"`).
-- `permission_gate.deny` — operator cancelled or sudo password missing.
-- `permission_gate.block` — automatic block (e.g. `.recall/` deletion, no UI available).
+`/abort`:
+- ativa um **abort lock** no processo atual
+- aborta subagentes em execução
+- bloqueia novas mutações `bash` / `write` / `edit`
+- bloqueia novas execuções do tool `subagent`
+- é limpo com `/reload`
 
-Review with:
+### `protected-paths.ts`
 
-```bash
-jq -c . ~/.pi/agent/audit.log | tail -50
-```
+Pede confirmação explícita para `write`/`edit` em:
+- `.env`
+- `.env.*`
+- `node_modules/`
+- `~/.pi/agent/settings.json`
+- `~/.pi/agent/auth.json`
+- `~/.pi/agent/models.json`
+- paths extras configurados em `protectedPaths`
 
-The log is append-only by convention; rotate manually if it grows too large.
+Observação: para `.git/` e `.recall/`, o hard block do `permission-gate` prevalece.
 
-## Subagent orchestration system log
+## Compaction safety
 
-For critical orchestration visibility, `subagent-policy` and `subagent` now append JSONL events to:
+- auto-compaction por threshold fica no runtime nativo do Pi
+- `custom-compaction.ts` só customiza o summary gerado em `session_before_compact`
+- `/trigger-compact` é manual; ele não é mais usado como gatilho automático em `turn_end`
+- isso evita interferência do fluxo manual de abort/reconnect no ciclo normal do agente principal
 
-- `logs/system-log.jsonl` (repo root)
+## Subagent safety
 
-Typical events include policy injection (lexical tier), auto-delegation transforms, and subagent run start/end.
+`subagent-env`:
+- spawna processos `pi` isolados com `shell: false`
+- aplica timeout de **180s por subagente**
+- marca `stopReason: "timeout"` quando expira
+- observa o abort lock e encerra subprocessos ao receber `/abort`
 
-`source` segmentation:
+Isso resolve a classe de travamento onde a UI fica em “Running...” por tempo indefinido por causa de provider lento.
+
+## Observability
+
+### `logs/system-log.jsonl`
+
+Eventos críticos são gravados em:
+- `logs/system-log.jsonl`
+
+`source` segmentado:
+- `trace-recorder`
 - `subagent-policy`
 - `subagent:tool`
 - `subagent:runner`
-- `subagent:usage` (explicit signal that a subagent execution happened)
+- `subagent:usage`
 
-Automatic rotation is enabled:
-- max file size: `5 MB`
-- retained history: `logs/system-log.1.jsonl` ... `logs/system-log.5.jsonl`
+Há eventos relevantes para:
+- início/fim de run
+- timeout de subagente
+- abort lock em subagente
+- uso efetivo do tool `subagent`
 
-Quick tail:
+Exemplo:
 
 ```bash
 tail -f logs/system-log.jsonl
 ```
 
-## .recall/project.json — UUID custody
+## Trace recorder
 
-`.recall/project.json` is the single source of truth that ties a working directory to a recall project. **Lose this file and you lose addressability of every session saved under that UUID.** Treat it like a private key:
+No harness, o agente interativo desta sessão é o run `main`; cada delegação cria um run `subagent` separado.
 
-- Commit it to the repository (it has no secrets, only the UUID and metadata) so it survives a fresh clone.
-- Back it up if the project lives outside git.
-- Do not regenerate it casually — a new UUID means a fresh empty project.
+O `trace-recorder` grava em:
 
-The `protected-paths` extension blocks writes to `.recall/` by default, and `permission-gate` blocks shell deletions targeting `.recall`.
+```text
+recall-pi/.pi/harness/runs/
+```
 
-## Subagent isolation
+A raiz é derivada do pacote da extensão, não do cwd do processo global do Pi. Isso evita traces fora do repositório.
 
-Each subagent invocation spawns a fresh `pi` process with `shell: false` and inherits the parent cwd. JSONL parse failures are now surfaced through the subagent's `stderr` field instead of being silently dropped, so a corrupted subprocess stream is visible in the result. The `subagent-policy` uses a lexical heuristic (zero API calls) to decide delegation tier.
+Os artefatos distinguem explicitamente `phase: "main"` e `phase: "subagent"`.
 
-If `pi` cannot be resolved on `PATH`, the subagent tool now fails fast with an actionable error rather than hanging.
+## `.recall/project.json` — UUID custody
 
-## Recall Python subprocess
+`.recall/project.json` é a identidade do projeto no recall.
 
-`recall_mcp_client.py` runs with `cwd` pinned to its own script directory so a misbehaving script cannot scribble in the caller's working tree. The caller cwd is still passed through the JSON payload for project-identity resolution.
+Recomendações:
+- preserve o arquivo
+- não regenere sem necessidade
+- versionar é aceitável se sua política interna permitir, pois ele carrega identidade e metadados do projeto
+
+Perder esse arquivo significa perder endereçabilidade direta da memória daquele projeto.
+
+## Skills discovery
+
+A descoberta de skills do projeto é feita pelo manifesto `pi.skills` do `package.json`.
+
+Diretórios atuais:
+- `./.agents/skills`
+- `./.pi/skills`
+
+Se adicionar/mover skills, rode `/reload`.
 
 ## Reporting
 
-This is a personal setup, not a hosted product — file an issue (or just patch directly) if you find a sharp edge.
+Este repositório é setup local/pessoal. Se encontrar comportamento inseguro ou inconsistente, corrija a extensão correspondente e atualize `README.md` + este documento.

@@ -9,6 +9,7 @@
 
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { activateAbortLock, getAbortLockState } from "./shared/abort-lock.ts";
 
 interface GateResult {
 	action: "execute" | "sudo" | "cancel";
@@ -45,9 +46,34 @@ function needsPrivilege(command: string): boolean {
 	return patterns.some((p) => p.test(command));
 }
 
+const BASH_MUTATION_PATTERNS = [
+	/\bgit\s+commit\b/i,
+	/\bgit\s+push\b/i,
+	/\bgit\s+merge\b/i,
+	/\bgit\s+rebase\b/i,
+	/\brm\s+(-rf?|--recursive)\b/i,
+	/\bmv\b/i,
+	/\bcp\b/i,
+	/\bmkdir\b/i,
+	/\bchmod\b/i,
+	/\bchown\b/i,
+	/\bsed\s+-i\b/i,
+	/\bperl\s+-i\b/i,
+];
+
+function isMutatingBash(command: string): boolean {
+	return BASH_MUTATION_PATTERNS.some((p) => p.test(command));
+}
+
+const MUTATING_TOOLS = new Set(["write", "edit"]);
+
 function isProtectedRecallDeletion(command: string): boolean {
 	const destructivePatterns = [/\b(rm|rmdir|unlink|shred|wipe|find)\b/i, /-delete\b/i, /\btruncate\b/i];
 	return command.includes(".recall") && destructivePatterns.some((p) => p.test(command));
+}
+
+function isProtectedWritePath(target: string): boolean {
+	return target.includes(".recall") || target.includes(".git/");
 }
 
 class SensitiveCommandDialog {
@@ -224,13 +250,57 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("abort", {
+		description: "Aborta subagentes em execução e bloqueia mutações até /reload",
+		handler: async (args, ctx) => {
+			const state = activateAbortLock(args.trim());
+			const lines = [
+				"Abort lock ativado.",
+				`reason: ${state.reason ?? "manual abort"}`,
+				`activatedAt: ${state.activatedAt ?? "unknown"}`,
+				"Subagentes em execução receberão abort e novas mutações serão bloqueadas até /reload.",
+			];
+			if (ctx.hasUI) {
+				ctx.ui.notify(lines.join("\n"), "warning");
+				return;
+			}
+			pi.sendMessage({
+				customType: "abort-lock",
+				content: lines.join("\n"),
+				display: true,
+			});
+		},
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
+		const abortState = getAbortLockState();
+		if (abortState.active && (event.toolName === "bash" || MUTATING_TOOLS.has(event.toolName))) {
+			return {
+				block: true,
+				reason: `Abort lock ativo${abortState.reason ? `: ${abortState.reason}` : ""}. Use /reload para limpar.`,
+			};
+		}
+		// Protege write/edit em caminhos sensíveis
+		if (MUTATING_TOOLS.has(event.toolName)) {
+			const target = String((event.input as any)?.path ?? "");
+			if (target && isProtectedWritePath(target)) {
+				return { block: true, reason: `Protegido: escrita em "${target}" bloqueada` };
+			}
+			return undefined;
+		}
+
 		if (event.toolName !== "bash") return undefined;
 
 		const command = String(event.input.command ?? "");
 		if (isProtectedRecallDeletion(command)) {
 			return { block: true, reason: "Protegido: exclusão de .recall bloqueada" };
 		}
+
+		// Bash mutante sem privilégio (ex: git commit, mkdir): permite sem modal
+		if (isMutatingBash(command) && !needsPrivilege(command)) {
+			return undefined;
+		}
+
 		if (!needsPrivilege(command)) return undefined;
 
 		if (!ctx.hasUI) {

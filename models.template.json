@@ -28,6 +28,14 @@
             "supportsDeveloperRole": false,
             "supportsReasoningEffort": false
           }
+        },
+        {
+          "id": "deepseek/deepseek-v4-flash",
+          "name": "Kilo DeepSeek V4 Flash",
+          "compat": {
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": false
+          }
         }
       ]
     }

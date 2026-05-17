@@ -6,5 +6,6 @@
     "thresholdTokens": 100000,
     "summarizerProvider": "opencode-go",
     "summarizerModel": "deepseek-v4-pro"
-  }
+  },
+  "skills": [".agents/skills/find-skills"]
 }

@@ -49,7 +49,7 @@ const AGENT_MODEL_EXPECTATIONS = [
 	["scout", "model: kilo/gpt-4.1-mini"],
 	["planner", "model: openai-codex/gpt-5.4"],
 	["worker", "model: kilo/gpt-5-mini"],
-	["reviewer", "model: kilo/qwen/qwen3.6-plus"],
+	["reviewer", "model: kilo/deepseek/deepseek-v4-flash"],
 ] as const;
 
 test("bundled subagents match model declared in md", async () => {
@@ -256,6 +256,62 @@ test(
 	},
 );
 
+
+test("bundled subagents can all respond through the subagent tool", async () => {
+	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-subagent-bundled-test-"));
+	const fakePi = path.join(tmpDir, "fake-pi.mjs");
+	await fs.writeFile(
+		fakePi,
+		`import process from 'node:process';
+
+const task = process.argv.at(-1) ?? '';
+console.log(JSON.stringify({
+  type: 'message_end',
+  message: {
+    role: 'assistant',
+    content: [{ type: 'text', text: 'ok: ' + task }],
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 }, totalTokens: 2 },
+    model: 'fake-model',
+    stopReason: 'end'
+  }
+}));
+`,
+		"utf8",
+	);
+
+	const previous = process.env.PI_SUBAGENT_BIN;
+	process.env.PI_SUBAGENT_BIN = fakePi;
+
+	try {
+		let tool: any;
+		subagentExt({ registerTool: (t) => (tool = t) } as any);
+		assert.ok(tool, "subagent tool was not registered");
+
+		for (const agent of ["debugger", "planner", "reviewer", "scout", "worker"]) {
+			const result = await tool.execute(
+				"test",
+				{ agent, task: `smoke ${agent}` },
+				undefined,
+				undefined,
+				{
+					cwd: tmpDir,
+					hasUI: false,
+					ui: { theme: fakeTheme },
+				},
+			);
+
+			assert.ok(!result.isError, `${agent} should not error`);
+			assert.equal(result.content[0].type, "text");
+			assert.match((result.content[0] as { type: "text"; text: string }).text, new RegExp(`ok: Task: smoke ${agent}`));
+			assert.equal(result.details.results[0].exitCode, 0);
+			assert.equal(result.details.results[0].agent, agent);
+		}
+	} finally {
+		if (previous === undefined) delete process.env.PI_SUBAGENT_BIN;
+		else process.env.PI_SUBAGENT_BIN = previous;
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	}
+});
 
 test("subagent tool can run a project-local agent", async () => {
 	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-subagent-test-"));

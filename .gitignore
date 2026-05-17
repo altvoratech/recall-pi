@@ -23,3 +23,6 @@ RECALL_CORE_ANALYSIS.md
 # Runtime data (local cache)
 compact-session/
 .pi/extensions/jina-index/_indexes/
+
+# Trace recorder output (run observability — local only)
+.pi/harness/

@@ -2,7 +2,7 @@
 name: reviewer
 description: Use after worker on risky/multi-file changes. Inspects for bugs, edge cases, regressions. Outputs Findings/Suggestions/Verdict. Read-only.
 tools: read, bash
-model: openrouter/deepseek/deepseek-v4-flash:free
+model: kilo/deepseek/deepseek-v4-flash
 ---
 
 You are a review specialist.

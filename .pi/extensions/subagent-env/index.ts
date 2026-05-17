@@ -23,11 +23,13 @@ import { type ExtensionAPI, type ExtensionContext, getMarkdownTheme, withFileMut
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
+import { getAbortLockState, onAbortLockChange } from "../shared/abort-lock.ts";
 import { appendSystemLog, getSystemLogPath } from "../shared/system-log.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
+const SUBAGENT_TIMEOUT_MS = 180_000; // 3 minutos por subagente
 
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
@@ -351,6 +353,7 @@ async function runSingleAgent(
 
 		args.push(`Task: ${task}`);
 		let wasAborted = false;
+		let timedOut = false;
 
 		const exitCode = await new Promise<number>((resolve) => {
 			const invocation = getPiInvocation(args);
@@ -360,6 +363,60 @@ async function runSingleAgent(
 				stdio: ["ignore", "pipe", "pipe"],
 			});
 			let buffer = "";
+			let finished = false;
+
+			const killProc = (reason: "abort" | "timeout") => {
+				if (reason === "timeout") timedOut = true;
+				else wasAborted = true;
+				proc.kill("SIGTERM");
+				setTimeout(() => {
+					if (!proc.killed) proc.kill("SIGKILL");
+				}, 5000);
+			};
+
+			const timeout = setTimeout(() => {
+				currentResult.stopReason = "timeout";
+				currentResult.errorMessage = `Subagent timed out after ${SUBAGENT_TIMEOUT_MS / 1000}s`;
+				appendSystemLog("subagent:runner", "timeout", {
+					cwd: cwd ?? defaultCwd,
+					agent: agent.name,
+					step,
+					timeoutMs: SUBAGENT_TIMEOUT_MS,
+					taskPreview: task.slice(0, 120),
+				});
+				killProc("timeout");
+			}, SUBAGENT_TIMEOUT_MS);
+
+			const signalAbortListener = () => {
+				currentResult.stopReason = "aborted";
+				currentResult.errorMessage = "Subagent was aborted";
+				killProc("abort");
+			};
+
+			const abortLockListener = (state: { active: boolean; reason: string | null }) => {
+				if (!state.active) return;
+				currentResult.stopReason = "aborted";
+				currentResult.errorMessage = `Subagent aborted by /abort${state.reason ? `: ${state.reason}` : ""}`;
+				appendSystemLog("subagent:runner", "abort_lock", {
+					cwd: cwd ?? defaultCwd,
+					agent: agent.name,
+					step,
+					reason: state.reason,
+				});
+				killProc("abort");
+			};
+			const unsubscribeAbortLock = onAbortLockChange(abortLockListener);
+			const currentAbortState = getAbortLockState();
+			if (currentAbortState.active) abortLockListener(currentAbortState);
+
+			const done = (code: number) => {
+				if (finished) return;
+				finished = true;
+				clearTimeout(timeout);
+				unsubscribeAbortLock();
+				if (signal) signal.removeEventListener("abort", signalAbortListener);
+				resolve(code);
+			};
 
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
@@ -411,28 +468,30 @@ async function runSingleAgent(
 
 			proc.on("close", (code) => {
 				if (buffer.trim()) processLine(buffer);
-				resolve(code ?? 0);
+				done(code ?? 0);
 			});
 
 			proc.on("error", () => {
-				resolve(1);
+				done(1);
 			});
 
 			if (signal) {
-				const killProc = () => {
-					wasAborted = true;
-					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
-				};
-				if (signal.aborted) killProc();
-				else signal.addEventListener("abort", killProc, { once: true });
+				if (signal.aborted) signalAbortListener();
+				else signal.addEventListener("abort", signalAbortListener, { once: true });
 			}
 		});
 
 		currentResult.exitCode = exitCode;
-		if (wasAborted) throw new Error("Subagent was aborted");
+		if (timedOut) {
+			currentResult.exitCode ||= 1;
+			currentResult.stopReason = "timeout";
+			currentResult.errorMessage ??= `Subagent timed out after ${SUBAGENT_TIMEOUT_MS / 1000}s`;
+		}
+		if (wasAborted) {
+			currentResult.exitCode ||= 1;
+			currentResult.stopReason ??= "aborted";
+			currentResult.errorMessage ??= "Subagent was aborted";
+		}
 		appendSystemLog("subagent:runner", "run_end", {
 			cwd: cwd ?? defaultCwd,
 			agent: agent.name,
@@ -445,7 +504,12 @@ async function runSingleAgent(
 		});
 		return currentResult;
 	} finally {
-		if (currentResult.exitCode !== 0 || currentResult.stopReason === "error" || currentResult.stopReason === "aborted") {
+		if (
+			currentResult.exitCode !== 0 ||
+			currentResult.stopReason === "error" ||
+			currentResult.stopReason === "aborted" ||
+			currentResult.stopReason === "timeout"
+		) {
 			appendSystemLog("subagent:runner", "run_end_error", {
 				cwd: cwd ?? defaultCwd,
 				agent: agent.name,
@@ -565,6 +629,15 @@ export default function (pi: ExtensionAPI) {
 			});
 
 			try {
+				const abortState = getAbortLockState();
+				if (abortState.active) {
+					const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+					return {
+						content: [{ type: "text", text: `Subagent blocked: abort lock ativo${abortState.reason ? `: ${abortState.reason}` : ""}. Use /reload para limpar.` }],
+						details: makeDetails(mode)([]),
+						isError: true,
+					};
+				}
 				if (modeCount !== 1) {
 				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
 				return {
@@ -662,7 +735,7 @@ export default function (pi: ExtensionAPI) {
 					results.push(result);
 
 					const isError =
-						result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+						result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted" || result.stopReason === "timeout";
 					if (isError) {
 						const errorMsg =
 							result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
@@ -850,7 +923,7 @@ export default function (pi: ExtensionAPI) {
 					},
 					makeDetails("single"),
 				);
-				const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+				const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted" || result.stopReason === "timeout";
 				if (isError) {
 					const errorMsg =
 						result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
@@ -892,6 +965,10 @@ export default function (pi: ExtensionAPI) {
 				agentScope,
 				mode: hasChain ? "chain" : hasTasks ? "parallel" : hasSingle ? "single" : "invalid",
 			});
+			if (ctx.hasUI) {
+				ctx.ui.setWidget("subagent-hud", undefined);
+				ctx.ui.setStatus("subagent-hud", undefined);
+			}
 			setSubStatus(undefined);
 		}
 		},
@@ -967,7 +1044,7 @@ export default function (pi: ExtensionAPI) {
 
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
-				const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+				const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted" || r.stopReason === "timeout";
 				const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
 				const finalOutput = getFinalOutput(r.messages);
