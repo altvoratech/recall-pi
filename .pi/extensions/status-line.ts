@@ -35,48 +35,56 @@ function renderStatus(
 	);
 }
 
+function renderCompactStatus(ctx: ExtensionContext, icon: string, message: string, subCount: number): string {
+	const theme = ctx.ui.theme;
+	const sub = subCount > 0 ? theme.fg("dim", ` ${subCount}x`) : "";
+	return `${theme.fg("accent", icon)} ${theme.fg("text", message)}${sub}`;
+}
+
 export default function (pi: ExtensionAPI) {
 	let turnCount = 0;
 	let subagentCount = 0;
 
-	const setStatus = (ctx: ExtensionContext, icon: string, message: string) => {
+	const setStatus = (ctx: ExtensionContext, icon: string, message: string, compactMessage = message) => {
 		ctx.ui.setStatus("status-line", renderStatus(ctx, icon, message, subagentCount));
+		ctx.ui.setStatus("run-state", renderCompactStatus(ctx, icon, compactMessage, subagentCount));
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
 		turnCount = 0;
 		subagentCount = 0;
-		setStatus(ctx, "●", "Ready");
+		setStatus(ctx, "●", "Ready", "ready");
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
 		turnCount++;
-		setStatus(ctx, "●", `Turn ${turnCount}`);
+		setStatus(ctx, "●", `Turn ${turnCount}`, `turn ${turnCount}`);
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
-		setStatus(ctx, "✓", `Turn ${turnCount} complete`);
+		setStatus(ctx, "✓", `Turn ${turnCount} complete`, "done");
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
-		setStatus(ctx, "⟳", "Working");
+		setStatus(ctx, "⟳", "Working", "working");
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
-		setStatus(ctx, "●", "Ready");
+		setStatus(ctx, "●", "Ready", "ready");
 	});
 
 	pi.on("tool_execution_start", async (event, ctx) => {
 		if (event.toolName === "subagent") subagentCount++;
-		setStatus(ctx, "⟳", event.toolName);
+		setStatus(ctx, "⟳", event.toolName, event.toolName);
 	});
 
 	pi.on("tool_execution_end", async (_event, ctx) => {
 		// Return to generic working state; agent_end / turn_end will overwrite to Ready/Complete.
-		setStatus(ctx, "⟳", "Working");
+		setStatus(ctx, "⟳", "Working", "working");
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		ctx.ui.setStatus("status-line", undefined);
+		ctx.ui.setStatus("run-state", undefined);
 	});
 }

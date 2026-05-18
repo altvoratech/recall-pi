@@ -16,6 +16,7 @@ Coleção de extensões do Pi usadas por `recall-pi`.
 - `subagent-env/` — runner de subagentes, timeout, UI HUD, agents em `subagent-env/agents/*.md`
 - `subagent-policy.ts` — heurística léxica para sugerir/delegar subagentes
 - `trace-recorder.ts` — tracing de runs em `.pi/harness/runs/`
+- `session-digest.ts` — observabilidade por turns; contador por sessão, aviso de sessão longa e status de digest no footer
 - `status-line.ts`, `working-indicator.ts`, `custom-footer.ts` — UX da TUI
 - `system-rules.ts` — injeta `GLOBAL_RULES.md`
 
@@ -69,6 +70,14 @@ Os traces distinguem `phase: "main"` e `phase: "subagent"`.
 - auto-compaction por threshold é do runtime nativo do Pi
 - `trigger-compact.ts` ficou apenas com o comando manual `/trigger-compact`
 - isso evita misturar fluxo manual de compaction com o ciclo automático pós-turno
+
+## Session digest (fase 1)
+
+- observa `turn_end` para manter um contador confiável de turns por sessão
+- persiste metadata em custom entries (`session-digest-state`) para sobreviver a reload/resume/tree navigation
+- exibe status persistente via `ctx.ui.setStatus("session-digest", ...)`
+- lê configuração merged de `sessionDigest` em `.pi/settings.json` / `~/.pi/agent/settings.json`
+- não gera digest automaticamente e não chama compaction
 
 ## Arquivos locais ignorados
 

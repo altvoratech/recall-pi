@@ -109,6 +109,7 @@ Principais extensões em `.pi/extensions/`:
 - `command-bridge/` — expõe slash commands de `~/.claude/`, `~/.codex/`, `~/.opencode/`
 - `subagent-env/` + `subagent-policy.ts` — ambiente, execução e roteamento de subagentes
 - `trace-recorder.ts` — tracing por run com spans de tool, artefatos e tokens (+ `/trace-last`, `/trace-list`)
+- `session-digest.ts` — Fase 1 de governança por turns: contador por sessão, alerta de sessão longa e status de digest no footer
 - `status-line.ts` / `working-indicator.ts` / `custom-footer.ts` — UX da UI
 
 ## Skills

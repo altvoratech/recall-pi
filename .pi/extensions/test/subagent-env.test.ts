@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import statusLineExt from "../status-line.ts";
+import sessionDigestExt from "../session-digest.ts";
 import subagentPolicyExt from "../subagent-policy.ts";
 import recallToolsExt from "../recall-tools/index.ts";
 import subagentExt from "../subagent-env/index.ts";
@@ -24,6 +25,7 @@ function createPiHarness() {
 	const handlers: Record<string, (...args: any[]) => any> = {};
 	const commands: Record<string, { description: string; handler: (...args: any[]) => any }> = {};
 	const renderers: Record<string, (...args: any[]) => any> = {};
+	const appendEntries: Array<{ customType: string; data: unknown }> = [];
 	const pi = {
 		on: (event: string, handler: (...args: any[]) => any) => {
 			handlers[event] = handler;
@@ -39,8 +41,11 @@ function createPiHarness() {
 		registerTool: (tool: any) => {
 			commands[tool.name] = tool;
 		},
+		appendEntry: (customType: string, data: unknown) => {
+			appendEntries.push({ customType, data });
+		},
 	} as any;
-	return { pi, handlers, commands, renderers };
+	return { pi, handlers, commands, renderers, appendEntries };
 }
 
 const EXT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -78,11 +83,20 @@ test("status line renders model-aware turn progress", async () => {
 	await handlers.turn_start?.({}, ctx);
 	await handlers.turn_end?.({}, ctx);
 
-	assert.deepEqual(statusCalls.map(([key]) => key), ["status-line", "status-line", "status-line"]);
+	assert.deepEqual(statusCalls.map(([key]) => key), [
+		"status-line",
+		"run-state",
+		"status-line",
+		"run-state",
+		"status-line",
+		"run-state",
+	]);
 	assert.match(statusCalls[0]![1]!, /Ready/);
-	assert.match(statusCalls[1]![1]!, /Turn 1/);
-	assert.match(statusCalls[2]![1]!, /Turn 1 complete/);
+	assert.match(statusCalls[2]![1]!, /Turn 1/);
+	assert.match(statusCalls[4]![1]!, /Turn 1 complete/);
 	assert.match(statusCalls[0]![1]!, /kilo\/qwen\/qwen3\.6-plus/);
+	assert.match(statusCalls[1]![1]!, /ready/);
+	assert.match(statusCalls[5]![1]!, /done/);
 });
 
 test("working indicator can hide and restore the loader row", async () => {
@@ -111,6 +125,88 @@ test("working indicator can hide and restore the loader row", async () => {
 	assert.equal(statusCalls[0]![0], "working-indicator");
 	assert.match(statusCalls[0]![1]!, /Indicator:/);
 	assert.ok(indicatorCalls.length >= 2);
+});
+
+test("session digest phase 1 counts turns and warns on threshold", async () => {
+	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-session-digest-"));
+	await fs.mkdir(path.join(tmpDir, ".pi"), { recursive: true });
+	await fs.writeFile(
+		path.join(tmpDir, ".pi", "settings.json"),
+		JSON.stringify({ sessionDigest: { notifyAfterTurns: 2, remindEveryTurns: 2, recentWithinTurns: 8 } }),
+	);
+
+	const { pi, handlers, appendEntries } = createPiHarness();
+	sessionDigestExt(pi);
+
+	const statusCalls: Array<[string, string | undefined]> = [];
+	const notifications: Array<[string, string]> = [];
+	const ctx = {
+		cwd: tmpDir,
+		hasUI: true,
+		sessionManager: {
+			getBranch: () => [],
+			getSessionFile: () => path.join(tmpDir, ".pi", "sessions", "abc123.jsonl"),
+		},
+		ui: {
+			theme: fakeTheme,
+			setStatus: (key: string, value: string | undefined) => statusCalls.push([key, value]),
+			notify: (message: string, type: string) => notifications.push([message, type]),
+		},
+	} as any;
+
+	await handlers.session_start?.({}, ctx);
+	await handlers.turn_end?.({}, ctx);
+	await handlers.turn_end?.({}, ctx);
+
+	assert.match(statusCalls[0]![1]!, /sd 0t ○/);
+	assert.match(statusCalls.at(-1)![1]!, /sd 2t ○/);
+	assert.equal(notifications.length, 1);
+	assert.match(notifications[0]![0], /Sessão longa/);
+	assert.equal(notifications[0]![1], "warning");
+	assert.equal(appendEntries.length, 2);
+	assert.equal(appendEntries.at(-1)?.customType, "session-digest-state");
+	assert.deepEqual(appendEntries.at(-1)?.data && typeof appendEntries.at(-1)?.data === "object" ? { turnCount: (appendEntries.at(-1)!.data as any).turnCount, lastNotifiedTurn: (appendEntries.at(-1)!.data as any).lastNotifiedTurn } : null, { turnCount: 2, lastNotifiedTurn: 2 });
+});
+
+test("session digest phase 1 restores turn count from branch and detects recent digest", async () => {
+	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-session-digest-"));
+	await fs.mkdir(path.join(tmpDir, ".pi", "harness", "digests", "sess-1"), { recursive: true });
+	await fs.writeFile(
+		path.join(tmpDir, ".pi", "settings.json"),
+		JSON.stringify({ sessionDigest: { notifyAfterTurns: 5, remindEveryTurns: 5, recentWithinTurns: 3 } }),
+	);
+	await fs.writeFile(
+		path.join(tmpDir, ".pi", "harness", "digests", "sess-1", "state.json"),
+		JSON.stringify({ turnCountAtDigest: 9, updatedAt: new Date().toISOString(), source: "manual" }),
+	);
+
+	const { pi, handlers } = createPiHarness();
+	sessionDigestExt(pi);
+
+	const statusCalls: Array<[string, string | undefined]> = [];
+	const ctx = {
+		cwd: tmpDir,
+		hasUI: true,
+		sessionManager: {
+			getBranch: () => [
+				{
+					type: "custom",
+					customType: "session-digest-state",
+					data: { version: 1, turnCount: 10, lastNotifiedTurn: 5, updatedAt: new Date().toISOString() },
+				},
+			],
+			getSessionFile: () => path.join(tmpDir, ".pi", "sessions", "sess-1.jsonl"),
+		},
+		ui: {
+			theme: fakeTheme,
+			setStatus: (key: string, value: string | undefined) => statusCalls.push([key, value]),
+			notify: () => undefined,
+		},
+	} as any;
+
+	await handlers.session_start?.({}, ctx);
+
+	assert.match(statusCalls.at(-1)![1]!, /sd 10t ●/);
 });
 
 function mockClassifierCtx(extra: Record<string, unknown> = {}) {

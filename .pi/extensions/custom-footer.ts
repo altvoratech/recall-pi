@@ -67,7 +67,7 @@ export default function (pi: ExtensionAPI) {
 					// Compact status pills (important when subagents/classifier are active).
 					const statusText = (() => {
 						if (!statuses || statuses.size === 0) return "";
-						const priority = ["subagent", "subagent-hud", "subagent-classifier", "recall-context", "status-line"];
+						const priority = ["subagent", "subagent-hud", "subagent-classifier", "recall-context", "session-digest", "run-state"];
 						const parts: string[] = [];
 						for (const key of priority) {
 							const v = statuses.get(key);
@@ -75,7 +75,7 @@ export default function (pi: ExtensionAPI) {
 						}
 						for (const [k, v] of Array.from(statuses.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
 							if (!v) continue;
-							if (priority.includes(k)) continue;
+							if (priority.includes(k) || k === "status-line") continue;
 							parts.push(v);
 						}
 						return parts.length ? parts.join(theme.fg("dim", "  ")) : "";
