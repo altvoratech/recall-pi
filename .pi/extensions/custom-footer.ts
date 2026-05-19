@@ -88,10 +88,15 @@ export default function (pi: ExtensionAPI) {
 				return out;
 			};
 
-			// Linha 2: pills PLANOS (sem bg) — igual recall-pi.png. O bloco
-			// de bg aqui (pessimo.png) ficou ruim; só a linha 1 tem bg.
-			const renderMeta = (pills: string[]): string =>
-				pills.join(theme.fg("dim", "  "));
+			// Backgrounds para pills da linha 2 (cicla se tiver mais pills que cores)
+			const pillBgs: ThemeBg[] = [
+				"selectedBg",
+				"userMessageBg", 
+				"customMessageBg",
+				"toolPendingBg",
+				"toolSuccessBg",
+				"toolErrorBg",
+			];
 
 			return {
 				dispose: unsub,
@@ -186,7 +191,12 @@ export default function (pi: ExtensionAPI) {
 							pills.push(v);
 						}
 						if (pills.length) {
-							lines.push(truncateToWidth(renderMeta(pills), width));
+							const line2Segs: Seg[] = pills.map((pill, i) => ({
+						bg: pillBgs[i % pillBgs.length],
+						fg: "text" as ThemeColor,
+						text: pill,
+					}));
+						lines.push(truncateToWidth(renderPowerline(line2Segs), width));
 						}
 					}
 					return lines;

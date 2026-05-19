@@ -70,6 +70,18 @@ Comportamento relevante:
 - `/abort` ativa abort lock global do processo
 - abort lock bloqueia novas execuções de `subagent`, `bash`, `write`, `edit` até `/reload`
 
+### Subagent Policy
+
+A `policy.ts` implementa heurística léxica de delegação automática:
+
+- **Tiers**: `skip` (small talk), `inject` (injeta policy no system prompt), `auto` (força delegação + bloqueia mutações)
+- **Bloqueio**: quando tier=auto, `write`/`edit`/bash mutativo são bloqueados no main — só o worker pode executar
+- **Default**: ON (policy ativa)
+- **Toggle**: `/subagent-policy off` desliga para a sessão atual, `/subagent-policy on` religa
+- **Status no footer**: `pol:on` ou `pol:off`
+
+Desligada quando o overhead de delegação não compensa (tasks simples, iteração rápida).
+
 ## Trace recorder
 
 Os traces são salvos em:

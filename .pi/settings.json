@@ -1,4 +1,5 @@
 {
+  "theme": "recall-pi",
   "compaction": {
     "thresholdTokens": 100000,
     "summarizerProvider": "opencode-go",
