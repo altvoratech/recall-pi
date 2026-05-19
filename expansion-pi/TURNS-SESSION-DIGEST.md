@@ -241,8 +241,8 @@ Essa proposta conversa diretamente com:
 ## Próximo passo natural
 
 Quando esta proposta for implementada, o ideal é criar uma extensão dedicada, por exemplo:
-- `session-digest.ts`
-- ou `turn-memory.ts`
+- `session-digest/` (com `index.ts` + helpers)
+- ou `turn-memory/`
 
 Ela pode nascer primeiro só com:
 - contador de turns

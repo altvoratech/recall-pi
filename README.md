@@ -74,7 +74,6 @@ recall-pi/
 │   ├── scripts/         # helpers
 │   └── settings.json    # settings do projeto
 ├── docs/
-├── GLOBAL_RULES.md
 ├── models.template.json # template para ~/.pi/agent/models.json (provider kilo)
 └── package.json         # manifesto do pacote Pi (extensions/skills/prompts)
 ```
@@ -109,7 +108,7 @@ Principais extensões em `.pi/extensions/`:
 - `command-bridge/` — expõe slash commands de `~/.claude/`, `~/.codex/`, `~/.opencode/`
 - `subagent-env/` + `subagent-policy.ts` — ambiente, execução e roteamento de subagentes
 - `trace-recorder.ts` — tracing por run com spans de tool, artefatos e tokens (+ `/trace-last`, `/trace-list`)
-- `session-digest.ts` — Fase 1 de governança por turns: contador por sessão, alerta de sessão longa e status de digest no footer
+- `session-digest/` — Fase 1+2 + injeção manual controlada: histórico por sessão, contador operacional desde o último checkpoint no footer e comando `/session-digest` (`refresh`, `status`, `show`, `inject`)
 - `status-line.ts` / `working-indicator.ts` / `custom-footer.ts` — UX da UI
 
 ## Skills
@@ -167,9 +166,11 @@ Isso evita usar o fluxo de compaction manual como shim de auto-compaction, o que
 ## Subagents
 
 Subagentes bundled:
+- `coordinator` → `openai-codex/gpt-5.3-codex`
 - `scout` → `kilo/gpt-4.1-mini`
-- `planner` → `openai-codex/gpt-5.4`
+- `planner` → `opencode-go/deepseek-v4-flash`
 - `worker` → `kilo/gpt-5-mini`
+- `executor` → `kilo/gpt-5-mini`
 - `reviewer` → `kilo/deepseek/deepseek-v4-flash`
 - `debugger` → `kilo/qwen/qwen3.6-plus`
 
@@ -264,7 +265,7 @@ Modelos registrados:
 | id | usado por |
 |---|---|
 | `gpt-4.1-mini` | scout |
-| `gpt-5-mini` | worker |
+| `gpt-5-mini` | worker, executor |
 | `deepseek/deepseek-v4-flash` | reviewer |
 | `qwen/qwen3.6-plus` | debugger |
 
@@ -277,7 +278,8 @@ Modelos registrados:
 
 | id | usado por |
 |---|---|
-| `gpt-5.4` | planner |
+| `gpt-5.3-codex` | coordinator |
+| `gpt-5.4` | (opcional/manual) |
 
 ## Security summary
 

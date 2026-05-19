@@ -7,8 +7,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import statusLineExt from "../status-line.ts";
-import sessionDigestExt from "../session-digest.ts";
-import subagentPolicyExt from "../subagent-policy.ts";
+import sessionDigestExt, { createSessionDigestExtension } from "../session-digest/index.ts";
+import { registerSubagentPolicy } from "../subagent-env/policy.ts";
 import recallToolsExt from "../recall-tools/index.ts";
 import subagentExt from "../subagent-env/index.ts";
 import workingIndicatorExt from "../working-indicator.ts";
@@ -52,7 +52,7 @@ const EXT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 const AGENT_MODEL_EXPECTATIONS = [
 	["scout", "model: kilo/gpt-4.1-mini"],
-	["planner", "model: openai-codex/gpt-5.4"],
+	["planner", "model: opencode-go/deepseek-v4-flash"],
 	["worker", "model: kilo/gpt-5-mini"],
 	["reviewer", "model: kilo/deepseek/deepseek-v4-flash"],
 ] as const;
@@ -158,14 +158,23 @@ test("session digest phase 1 counts turns and warns on threshold", async () => {
 	await handlers.turn_end?.({}, ctx);
 	await handlers.turn_end?.({}, ctx);
 
-	assert.match(statusCalls[0]![1]!, /sd 0t ○/);
-	assert.match(statusCalls.at(-1)![1]!, /sd 2t ○/);
+	assert.match(statusCalls[0]![1]!, /sd \+0 ○/);
+	assert.match(statusCalls.at(-1)![1]!, /sd \+2 ○/);
 	assert.equal(notifications.length, 1);
 	assert.match(notifications[0]![0], /Sessão longa/);
 	assert.equal(notifications[0]![1], "warning");
 	assert.equal(appendEntries.length, 2);
 	assert.equal(appendEntries.at(-1)?.customType, "session-digest-state");
-	assert.deepEqual(appendEntries.at(-1)?.data && typeof appendEntries.at(-1)?.data === "object" ? { turnCount: (appendEntries.at(-1)!.data as any).turnCount, lastNotifiedTurn: (appendEntries.at(-1)!.data as any).lastNotifiedTurn } : null, { turnCount: 2, lastNotifiedTurn: 2 });
+	assert.deepEqual(
+		appendEntries.at(-1)?.data && typeof appendEntries.at(-1)?.data === "object"
+			? {
+					turnCount: (appendEntries.at(-1)!.data as any).turnCount,
+					checkpointTurnCount: (appendEntries.at(-1)!.data as any).checkpointTurnCount,
+					lastNotifiedTurn: (appendEntries.at(-1)!.data as any).lastNotifiedTurn,
+				}
+			: null,
+		{ turnCount: 2, checkpointTurnCount: 0, lastNotifiedTurn: 2 },
+	);
 });
 
 test("session digest phase 1 restores turn count from branch and detects recent digest", async () => {
@@ -177,13 +186,14 @@ test("session digest phase 1 restores turn count from branch and detects recent 
 	);
 	await fs.writeFile(
 		path.join(tmpDir, ".pi", "harness", "digests", "sess-1", "state.json"),
-		JSON.stringify({ turnCountAtDigest: 9, updatedAt: new Date().toISOString(), source: "manual" }),
+		JSON.stringify({ schemaVersion: 1, sessionId: "sess-1", startedAt: new Date().toISOString(), turnCountAtDigest: 9, updatedAt: new Date().toISOString(), source: "manual" }),
 	);
 
-	const { pi, handlers } = createPiHarness();
+	const { pi, handlers, commands } = createPiHarness();
 	sessionDigestExt(pi);
 
 	const statusCalls: Array<[string, string | undefined]> = [];
+	const notifications: Array<[string, string]> = [];
 	const ctx = {
 		cwd: tmpDir,
 		hasUI: true,
@@ -200,13 +210,185 @@ test("session digest phase 1 restores turn count from branch and detects recent 
 		ui: {
 			theme: fakeTheme,
 			setStatus: (key: string, value: string | undefined) => statusCalls.push([key, value]),
-			notify: () => undefined,
+			notify: (message: string, type: string) => notifications.push([message, type]),
 		},
 	} as any;
 
 	await handlers.session_start?.({}, ctx);
+	assert.ok(commands["session-digest"], "session-digest command missing");
+	await commands["session-digest"]!.handler("status", ctx);
 
-	assert.match(statusCalls.at(-1)![1]!, /sd 10t ●/);
+	assert.match(statusCalls.at(-1)![1]!, /sd \+1 ●/);
+	assert.match(notifications.at(-1)![0], /Session digest status:/);
+	assert.match(notifications.at(-1)![0], /totalTurns: 10/);
+	assert.match(notifications.at(-1)![0], /checkpointTurn: 9/);
+	assert.match(notifications.at(-1)![0], /turnsSinceCheckpoint: 1/);
+});
+
+test("session digest refresh writes latest.md and state.json without compaction", async () => {
+	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-session-digest-refresh-"));
+	await fs.mkdir(path.join(tmpDir, ".pi"), { recursive: true });
+	await fs.writeFile(
+		path.join(tmpDir, ".pi", "settings.json"),
+		JSON.stringify({ sessionDigest: { notifyAfterTurns: 24, remindEveryTurns: 12, recentWithinTurns: 8 } }),
+	);
+
+	const ext = createSessionDigestExtension({
+		runDigest: async () => ({
+			summary: "# Digest\n\n- objetivo\n- proximo passo",
+			modelLabel: "opencode-go/deepseek-v4-pro",
+			tokensEstimate: 321,
+		}),
+	});
+	const { pi, handlers, commands } = createPiHarness();
+	ext(pi);
+
+	const notifications: Array<[string, string]> = [];
+	const statusCalls: Array<[string, string | undefined]> = [];
+	let waited = false;
+	const ctx = {
+		cwd: tmpDir,
+		hasUI: true,
+		waitForIdle: async () => {
+			waited = true;
+		},
+		getContextUsage: () => ({ tokens: 321, percent: 1, contextWindow: 200000 }),
+		sessionManager: {
+			getBranch: () => [
+				{
+					type: "message",
+					message: {
+						role: "assistant",
+						provider: "anthropic",
+						model: "claude-opus-4-5",
+						content: [{ type: "text", text: "Resposta atual" }],
+						usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+						timestamp: Date.now(),
+					},
+				},
+			],
+			getSessionFile: () => path.join(tmpDir, ".pi", "sessions", "sess-refresh.jsonl"),
+		},
+		ui: {
+			theme: fakeTheme,
+			setStatus: (key: string, value: string | undefined) => statusCalls.push([key, value]),
+			notify: (message: string, type: string) => notifications.push([message, type]),
+		},
+	} as any;
+
+	await handlers.session_start?.({}, ctx);
+	await commands["session-digest"]!.handler("refresh", ctx);
+
+	assert.equal(waited, true);
+	const latest = await fs.readFile(path.join(tmpDir, ".pi", "harness", "digests", "sess-refresh", "latest.md"), "utf8");
+	const state = JSON.parse(await fs.readFile(path.join(tmpDir, ".pi", "harness", "digests", "sess-refresh", "state.json"), "utf8"));
+	assert.match(latest, /# Digest/);
+	assert.equal(state.turnCountAtDigest, 1);
+	assert.equal(state.source, "manual");
+	assert.equal(state.model, "opencode-go/deepseek-v4-pro");
+	assert.match(statusCalls.at(-1)![1]!, /sd \+0 ●/);
+	assert.match(notifications.at(-1)![0], /Session digest pronto/);
+});
+
+test("session digest resets operational counter after compaction", async () => {
+	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-session-digest-compact-"));
+	await fs.mkdir(path.join(tmpDir, ".pi"), { recursive: true });
+	await fs.writeFile(
+		path.join(tmpDir, ".pi", "settings.json"),
+		JSON.stringify({ sessionDigest: { notifyAfterTurns: 2, remindEveryTurns: 2, recentWithinTurns: 1 } }),
+	);
+
+	const { pi, handlers, appendEntries } = createPiHarness();
+	sessionDigestExt(pi);
+
+	const notifications: Array<[string, string]> = [];
+	const statusCalls: Array<[string, string | undefined]> = [];
+	const ctx = {
+		cwd: tmpDir,
+		hasUI: true,
+		sessionManager: {
+			getBranch: () => [
+				{ type: "custom", customType: "session-digest-state", data: { version: 2, turnCount: 10, checkpointTurnCount: 0, lastNotifiedTurn: 0, updatedAt: new Date().toISOString() } },
+			],
+			getSessionFile: () => path.join(tmpDir, ".pi", "sessions", "sess-compact.jsonl"),
+		},
+		ui: {
+			theme: fakeTheme,
+			setStatus: (key: string, value: string | undefined) => statusCalls.push([key, value]),
+			notify: (message: string, type: string) => notifications.push([message, type]),
+		},
+	} as any;
+
+	await handlers.session_start?.({}, ctx);
+	await handlers.session_compact?.({}, ctx);
+	assert.match(statusCalls.at(-1)![1]!, /sd \+0 ○/);
+	assert.deepEqual(
+		appendEntries.at(-1)?.data && typeof appendEntries.at(-1)?.data === "object"
+			? {
+					turnCount: (appendEntries.at(-1)!.data as any).turnCount,
+					checkpointTurnCount: (appendEntries.at(-1)!.data as any).checkpointTurnCount,
+					lastNotifiedTurn: (appendEntries.at(-1)!.data as any).lastNotifiedTurn,
+				}
+			: null,
+		{ turnCount: 10, checkpointTurnCount: 10, lastNotifiedTurn: 10 },
+	);
+
+	await handlers.turn_end?.({}, ctx);
+	await handlers.turn_end?.({}, ctx);
+	assert.match(statusCalls.at(-1)![1]!, /sd \+2 ○/);
+	assert.equal(notifications.length, 1);
+	assert.match(notifications[0]![0], /Sessão longa/);
+});
+
+test("session digest inject arms next turn and consumes digest once", async () => {
+	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-session-digest-inject-"));
+	await fs.mkdir(path.join(tmpDir, ".pi", "harness", "digests", "sess-inject"), { recursive: true });
+	await fs.writeFile(
+		path.join(tmpDir, ".pi", "settings.json"),
+		JSON.stringify({ sessionDigest: { notifyAfterTurns: 24, remindEveryTurns: 12, recentWithinTurns: 8 } }),
+	);
+	await fs.writeFile(path.join(tmpDir, ".pi", "harness", "digests", "sess-inject", "latest.md"), "# Digest\n\n- lembrar do estado");
+	await fs.writeFile(
+		path.join(tmpDir, ".pi", "harness", "digests", "sess-inject", "state.json"),
+		JSON.stringify({ schemaVersion: 1, sessionId: "sess-inject", startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), turnCountAtDigest: 3, source: "manual" }),
+	);
+
+	const { pi, handlers, commands } = createPiHarness();
+	sessionDigestExt(pi);
+
+	const notifications: Array<[string, string]> = [];
+	const statusCalls: Array<[string, string | undefined]> = [];
+	const ctx = {
+		cwd: tmpDir,
+		hasUI: true,
+		sessionManager: {
+			getBranch: () => [
+				{ type: "custom", customType: "session-digest-state", data: { version: 1, turnCount: 3, lastNotifiedTurn: 0, updatedAt: new Date().toISOString() } },
+			],
+			getSessionFile: () => path.join(tmpDir, ".pi", "sessions", "sess-inject.jsonl"),
+		},
+		ui: {
+			theme: fakeTheme,
+			setStatus: (key: string, value: string | undefined) => statusCalls.push([key, value]),
+			notify: (message: string, type: string) => notifications.push([message, type]),
+		},
+	} as any;
+
+	await handlers.session_start?.({}, ctx);
+	await commands["session-digest"]!.handler("inject", ctx);
+	assert.match(statusCalls.at(-1)![1]!, /sd \+0 ↪/);
+	assert.match(notifications.at(-1)![0], /armado para o próximo turn/i);
+
+	const injected = await handlers.before_agent_start?.({ prompt: "continue daqui", systemPrompt: "BASE" }, ctx);
+	assert.ok(injected?.message, "digest should be injected on next turn");
+	assert.equal(injected.message.customType, "session-digest-context");
+	assert.match(String(injected.message.content?.[0]?.text ?? ""), /<session-digest>/);
+	assert.match(String(injected.message.content?.[0]?.text ?? ""), /lembrar do estado/);
+	assert.match(statusCalls.at(-1)![1]!, /sd \+0 ●/);
+	assert.match(notifications.at(-1)![0], /injetado neste turn/i);
+
+	const second = await handlers.before_agent_start?.({ prompt: "mais um passo", systemPrompt: "BASE" }, ctx);
+	assert.equal(second, undefined);
 });
 
 function mockClassifierCtx(extra: Record<string, unknown> = {}) {
@@ -221,7 +403,7 @@ function mockClassifierCtx(extra: Record<string, unknown> = {}) {
 
 test("subagent policy auto-delegates when lexical heuristic returns 'auto'", async () => {
 	const { pi, handlers } = createPiHarness();
-	subagentPolicyExt(pi);
+	registerSubagentPolicy(pi);
 
 	const response = await handlers.input?.(
 		{ text: "investiga o repo X e propoe refactor em varios arquivos " + Math.random(), source: "interactive" },
@@ -236,7 +418,7 @@ test("subagent policy auto-delegates when lexical heuristic returns 'auto'", asy
 
 test("subagent policy injects guidance when lexical heuristic returns 'inject'", async () => {
 	const { pi, handlers } = createPiHarness();
-	subagentPolicyExt(pi);
+	registerSubagentPolicy(pi);
 
 	const response = await handlers.before_agent_start?.(
 		{ prompt: "le esses dois arquivos e me explica " + Math.random(), systemPrompt: "BASE" },
@@ -250,7 +432,7 @@ test("subagent policy injects guidance when lexical heuristic returns 'inject'",
 
 test("subagent policy skips when lexical heuristic returns 'skip'", async () => {
 	const { pi, handlers } = createPiHarness();
-	subagentPolicyExt(pi);
+	registerSubagentPolicy(pi);
 
 	const inputResp = await handlers.input?.(
 		{ text: "oi", source: "interactive" },
@@ -273,7 +455,7 @@ test("subagent policy classifies a complex PT prompt via lexical heuristic", { s
 	const settings = JSON.parse(original);
 	try {
 		const { pi, handlers } = createPiHarness();
-		subagentPolicyExt(pi);
+		registerSubagentPolicy(pi);
 
 		const prompt =
 			"investiga o repositorio inteiro, mapeia onde o orquestrador decide delegar, " +
@@ -380,7 +562,9 @@ console.log(JSON.stringify({
 
 	try {
 		let tool: any;
-		subagentExt({ registerTool: (t) => (tool = t) } as any);
+		// subagent-env/index.ts agora também registra a policy (Tier 2a):
+		// stubs no-op de registerCommand/on bastam para os testes do tool.
+		subagentExt({ registerTool: (t) => (tool = t), registerCommand: () => {}, on: () => {} } as any);
 		assert.ok(tool, "subagent tool was not registered");
 
 		for (const agent of ["debugger", "planner", "reviewer", "scout", "worker"]) {
@@ -456,7 +640,9 @@ Respond with exactly: pong
 
 	try {
 		let tool: any;
-		subagentExt({ registerTool: (t) => (tool = t) } as any);
+		// subagent-env/index.ts agora também registra a policy (Tier 2a):
+		// stubs no-op de registerCommand/on bastam para os testes do tool.
+		subagentExt({ registerTool: (t) => (tool = t), registerCommand: () => {}, on: () => {} } as any);
 		assert.ok(tool, "subagent tool was not registered");
 
 		const statusCalls: Array<[string, string | undefined]> = [];

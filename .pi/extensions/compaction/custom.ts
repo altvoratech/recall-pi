@@ -1,30 +1,23 @@
 /**
- * Custom Compaction Extension
+ * Custom Compaction (domínio compaction)
  *
- * Replaces default compaction with a full conversation summary via a configurable
- * summarizer model (defaults to opencode-go/deepseek-v4-pro).
+ * Substitui a compaction default por um resumo cumulativo via modelo
+ * summarizer configurável (default opencode-go/deepseek-v4-pro).
  *
- * Config via ~/.pi/agent/settings.json:
- *   "compaction": {
- *     "summarizerProvider": "opencode-go",
- *     "summarizerModel": "deepseek-v4-pro"
- *   }
+ * Config via settings.json:
+ *   "compaction": { "summarizerProvider": "...", "summarizerModel": "..." }
  *
- * On `session_before_compact`:
- *   1. Pull all messagesToSummarize + turnPrefixMessages
- *   2. Send to summarizer model with a structured prompt
- *   3. Return summary that replaces the entire history
+ * Em `session_before_compact`: resume messagesToSummarize+turnPrefix e
+ * retorna o summary que substitui o histórico. Fallback pra default se
+ * lookup/auth do modelo falhar.
  *
- * Falls back to default compaction if model lookup or auth fails.
+ * Registrado pelo index.ts do domínio via registerCustomCompaction(pi).
  */
 
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { readSettings } from "./shared/settings.ts";
 import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
+import { readSettings } from "../shared/settings.ts";
 
 const DEFAULT_PROVIDER = "opencode-go";
 const DEFAULT_MODEL = "deepseek-v4-pro";
@@ -84,7 +77,7 @@ Rules:
 
 Format: structured markdown, scannable, concise.`;
 
-export default function (pi: ExtensionAPI) {
+export function registerCustomCompaction(pi: ExtensionAPI) {
 	let cfg = loadConfig();
 
 	pi.on("session_start", (_event, ctx) => {

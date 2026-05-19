@@ -8,17 +8,34 @@ Coleção de extensões do Pi usadas por `recall-pi`.
 - `protected-paths.ts` — confirmação para alterações em paths sensíveis (`.env`, `node_modules/`, configs do Pi)
 - `recall-tools/` — tools `recall_mcp_load` e `recall_save`
 - `jina-index/` — indexação/busca local de docs
-- `custom-compaction.ts` — summary cumulativo via LLM no hook `session_before_compact`
-- `compaction-snapshot/` — persiste snapshot do summary em `session_compact`
-- `trigger-compact.ts` — comando manual `/trigger-compact`
+- `compaction/` — domínio consolidado: `custom.ts` (summary cumulativo via LLM em `session_before_compact`), `snapshot.ts` (persiste snapshot em `session_compact`), `trigger.ts` (comando manual `/trigger-compact`)
 - `tool-discovery/` — `search_tool` + ativação on-demand sem inflar o system prompt
 - `command-bridge/` — expõe slash commands externos no Pi
-- `subagent-env/` — runner de subagentes, timeout, UI HUD, agents em `subagent-env/agents/*.md`
-- `subagent-policy.ts` — heurística léxica para sugerir/delegar subagentes
-- `trace-recorder.ts` — tracing de runs em `.pi/harness/runs/`
-- `session-digest.ts` — observabilidade por turns; contador por sessão, aviso de sessão longa e status de digest no footer
+- `subagent-env/` — subsistema de subagentes: runner/timeout/HUD (`index.ts`), `policy.ts` (heurística léxica de delegação, antes solta), agents em `subagent-env/agents/*.md`
+- `trace-recorder/` — tracing de runs em `.pi/harness/runs/` (`index.ts` + `paths.ts`/`helpers.ts`/`writer.ts`/`types.ts`)
+- `session-digest/` — observabilidade por turns + digest manual + injeção controlada; histórico por sessão, contador operacional desde o último checkpoint, status persistente e comando `/session-digest`
 - `status-line.ts`, `working-indicator.ts`, `custom-footer.ts` — UX da TUI
 - `system-rules.ts` — injeta `GLOBAL_RULES.md`
+
+## Convenção: diretório vs arquivo solto
+
+Regra objetiva (encerra o caso-a-caso):
+
+> **Diretório** (`nome/index.ts` + módulos) **só quando** pelo menos um:
+> 1. split real em múltiplos `.ts` por concern (ex: `trace-recorder/`, `session-digest/`);
+> 2. carrega asset não-`.ts` (ex: `recall-tools/` com `recall_mcp_client.py`);
+> 3. é um **domínio** com peças co-registradas (ex: `compaction/`, `subagent-env/`).
+>
+> **Arquivo solto** (`nome.ts`) para todo o resto: extensão pequena,
+> single-concern. Embrulhar isso num diretório só adiciona boilerplate.
+
+O Pi auto-descobre tanto `*.ts` solto quanto `dir/index.ts` — flat é
+idiomático para o caso simples; diretório é para complexidade real.
+
+Soltas mantidas de propósito (single-concern, não viram diretório):
+`permission-gate.ts`, `protected-paths.ts`, `system-rules.ts`,
+`image-generation.ts`, `status-line.ts`, `working-indicator.ts`,
+`custom-footer.ts`, `notify.ts`, `confirm-destructive.ts`.
 
 ## Recall
 
@@ -71,12 +88,16 @@ Os traces distinguem `phase: "main"` e `phase: "subagent"`.
 - `trigger-compact.ts` ficou apenas com o comando manual `/trigger-compact`
 - isso evita misturar fluxo manual de compaction com o ciclo automático pós-turno
 
-## Session digest (fase 1)
+## Session digest (fases 1 e 2)
 
 - observa `turn_end` para manter um contador confiável de turns por sessão
+- o pill do footer mostra turns operacionais desde o último checkpoint útil (`refresh`/`compact`), enquanto o total histórico fica disponível em `status`
 - persiste metadata em custom entries (`session-digest-state`) para sobreviver a reload/resume/tree navigation
 - exibe status persistente via `ctx.ui.setStatus("session-digest", ...)`
 - lê configuração merged de `sessionDigest` em `.pi/settings.json` / `~/.pi/agent/settings.json`
+- expõe `/session-digest` com `refresh`, `status`, `show` e `inject`
+- `inject` arma o `latest.md` para o próximo turn apenas, sem auto-injeção permanente
+- grava artefatos em `.pi/harness/digests/<session-id>/latest.md` + `state.json`
 - não gera digest automaticamente e não chama compaction
 
 ## Arquivos locais ignorados

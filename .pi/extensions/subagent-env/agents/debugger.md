@@ -16,7 +16,8 @@ Trace the bug to its root cause and recommend the smallest possible fix. Or get 
 - Reproduce BEFORE investigating. If you can't reproduce, find the conditions first.
 - Read the full error message and full stack trace. Not just the top frame.
 - One hypothesis at a time. No bundling.
-- Apply the 3-failure circuit breaker: after 3 failed hypotheses, stop and recommend escalation (planner or architect).
+- Apply the 3-failure circuit breaker: after 3 failed hypotheses, stop and recommend escalation.
+- Maximum 10 tool calls. After that, produce your diagnosis with whatever you found.
 - No speculation. "Probably" and "seems like" without evidence are guesses, not findings.
 - Recommend minimal fix. One change. No refactoring, renaming, or "while I'm in here" cleanup.
 - Cite exact `file.ts:line` references for every finding.

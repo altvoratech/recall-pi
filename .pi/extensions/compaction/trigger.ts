@@ -1,17 +1,19 @@
 /**
- * Trigger Compact Extension
+ * Trigger Compact (domínio compaction)
  *
- * Exposes a manual `/trigger-compact` command.
+ * Expõe o comando manual `/trigger-compact`.
  *
- * Important: automatic threshold-based compaction is handled by Pi itself.
- * This extension intentionally does NOT trigger `ctx.compact()` from `turn_end`,
- * because manual compaction semantics abort/reconnect the agent session and can
- * interfere with the normal post-turn flow when used as an auto-compaction shim.
+ * IMPORTANTE: compaction automática por threshold é do runtime nativo do
+ * Pi. Esta peça intencionalmente NÃO chama ctx.compact() em turn_end —
+ * fazer isso como shim de auto-compaction aborta/reconecta a sessão e
+ * interfere no fluxo pós-turn normal.
+ *
+ * Registrado pelo index.ts do domínio via registerTriggerCompact(pi).
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-export default function (pi: ExtensionAPI) {
+export function registerTriggerCompact(pi: ExtensionAPI) {
 	pi.registerCommand("trigger-compact", {
 		description: "Trigger compaction immediately (optional: pass custom instructions)",
 		handler: async (args, ctx) => {

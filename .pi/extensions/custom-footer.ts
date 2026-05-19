@@ -1,19 +1,39 @@
 /**
- * Custom Footer Extension
+ * Custom Footer Extension — powerline (com background)
  *
- * Replaces the default single-line stats footer with a 3-row layout:
+ * Footer de 2 linhas, ambas com BLOCOS coloridos (background) estilo
+ * powerline. Núcleo do efeito: o glifo separador tem fg = bg do segmento
+ * anterior, criando a ilusão de seta conectando as cores.
  *
- *   ~/recall-core (main)                          opencode-go/qwen3.6-plus · medium
- *   ↑13M ↓56k cache R3.5M
- *   $7.033 · ctx 26.0%/262k · auto
+ *   π  model · thinking  cwd ⎇ branch  ↑in ↓out R  $cost ctx%      ● ready
+ *   ▏ sub:auto … · pol:on · rcl ● · sd +0 ○ · Indicator: spinner
  *
- * Toggle with /footer.
+ * Linha 1: segmentos com bg distintos + bleed (ThemeBg/ThemeColor do tema).
+ * Linha 2: bloco único com os extension status pills (decisão
+ * custom_footer_must_render_extension_statuses) — mesmo "peso" visual da
+ * linha 1, não fica solto/estranho sem fundo.
+ *
+ * 100% theme-driven (getFgAnsi/getBgAnsi) — cores em
+ * .pi/themes/recall-pi.json; fronteira theme=paleta/footer=estrutura.
+ * Requer Nerd Font; fallback ASCII (sem bleed) via PI_FOOTER_ASCII=1.
+ * Toggle com /footer (default on).
  */
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import * as os from "node:os";
+
+// ThemeBg não é re-exportado do root, mas Theme é — deriva do próprio
+// método getBgAnsi (fonte única; não desatualiza se o Pi mudar os tokens).
+type ThemeBg = Parameters<Theme["getBgAnsi"]>[0];
+
+const RESET = "\x1b[0m";
+const ASCII = process.env.PI_FOOTER_ASCII === "1";
+const SEP = ASCII ? "" : ""; // U+E0B0 powerline solid
+const SEP_THIN = ASCII ? "·" : ""; // U+E0B1 thin (intra-bloco)
+const PI_GLYPH = ASCII ? "pi" : "π"; // π
+const BRANCH_GLYPH = ASCII ? "git:" : "⎇"; // ⎇
 
 function shortenPath(p: string): string {
 	const home = os.homedir();
@@ -27,19 +47,56 @@ function fmtTokens(n: number): string {
 	return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
+// Converte um SGR de background no mesmo tom como foreground.
+// Truecolor (\x1b[48;2;r;g;b m) e 256 (\x1b[48;5;n m).
+function bgAsFg(bgAnsi: string): string {
+	return bgAnsi.replace(/\x1b\[48/g, "\x1b[38");
+}
+
+interface Seg {
+	bg: ThemeBg;
+	fg: ThemeColor;
+	text: string;
+}
+
 export default function (pi: ExtensionAPI) {
-	// Default ON so extension statuses (subagents/classifier/recall) are visible in the footer.
 	let enabled = true;
 
 	const enableFooter = (ctx: ExtensionContext) => {
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			const unsub = footerData.onBranchChange(() => tui.requestRender());
 
+			// Grupo powerline: cada segmento com seu bg; seta = bg anterior.
+			const renderPowerline = (segs: Seg[]): string => {
+				if (segs.length === 0) return "";
+				if (ASCII) {
+					return segs
+						.map((s) => theme.fg(s.fg, ` ${s.text} `))
+						.join(theme.fg("dim", SEP_THIN));
+				}
+				let out = "";
+				for (let i = 0; i < segs.length; i++) {
+					const s = segs[i];
+					out += theme.getBgAnsi(s.bg) + theme.getFgAnsi(s.fg) + ` ${s.text} `;
+					const next = segs[i + 1];
+					if (next) {
+						out += theme.getBgAnsi(next.bg) + bgAsFg(theme.getBgAnsi(s.bg)) + SEP;
+					} else {
+						out += RESET + bgAsFg(theme.getBgAnsi(s.bg)) + SEP + RESET;
+					}
+				}
+				return out;
+			};
+
+			// Linha 2: pills PLANOS (sem bg) — igual recall-pi.png. O bloco
+			// de bg aqui (pessimo.png) ficou ruim; só a linha 1 tem bg.
+			const renderMeta = (pills: string[]): string =>
+				pills.join(theme.fg("dim", "  "));
+
 			return {
 				dispose: unsub,
 				invalidate() {},
 				render(width: number): string[] {
-					// Aggregate usage from the current branch
 					let input = 0,
 						output = 0,
 						cacheRead = 0,
@@ -61,59 +118,85 @@ export default function (pi: ExtensionAPI) {
 					const usage = ctx.getContextUsage();
 					const statuses = footerData.getExtensionStatuses();
 
-					const branchStr = branch ? theme.fg("muted", ` (${branch})`) : "";
-					const thinkStr = thinking ? theme.fg("dim", ` · ${thinking}`) : "";
+					const ctxColor: ThemeColor =
+						usage && usage.percent !== null
+							? usage.percent >= 90
+								? "error"
+								: usage.percent >= 70
+									? "warning"
+									: "accent"
+							: "muted";
+					const ctxPct =
+						usage && usage.percent !== null ? `${usage.percent.toFixed(0)}%` : "—";
 
-					// Compact status pills (important when subagents/classifier are active).
-					const statusText = (() => {
-						if (!statuses || statuses.size === 0) return "";
-						const priority = ["subagent", "subagent-hud", "subagent-classifier", "recall-context", "session-digest", "run-state"];
-						const parts: string[] = [];
+					const segs: Seg[] = [
+						{ bg: "selectedBg", fg: "accent", text: PI_GLYPH },
+						{
+							bg: "userMessageBg",
+							fg: "text",
+							text: model + (thinking ? ` · ${thinking}` : ""),
+						},
+						{
+							bg: "customMessageBg",
+							fg: "customMessageLabel",
+							text: cwd + (branch ? ` ${BRANCH_GLYPH} ${branch}` : ""),
+						},
+						{
+							bg: "toolPendingBg",
+							fg: "muted",
+							text: `↑${fmtTokens(input)} ↓${fmtTokens(output)} R${fmtTokens(cacheRead)}`,
+						},
+						{ bg: "toolSuccessBg", fg: ctxColor, text: `$${cost.toFixed(2)} ctx ${ctxPct}` },
+					];
+
+					const left = renderPowerline(segs);
+					const runState = statuses?.get("run-state");
+					let line1: string;
+					if (runState) {
+						const pad = Math.max(1, width - visibleWidth(left) - visibleWidth(runState));
+						line1 = truncateToWidth(left + " ".repeat(pad) + runState, width);
+					} else {
+						line1 = truncateToWidth(left, width);
+					}
+
+					const lines = [line1];
+
+					if (statuses && statuses.size > 0) {
+						const priority = [
+							"subagent",
+							"subagent-hud",
+							"subagent-classifier",
+							"subagent-policy",
+							"recall-context",
+							"session-digest",
+						];
+						const seen = new Set<string>();
+						const pills: string[] = [];
 						for (const key of priority) {
 							const v = statuses.get(key);
-							if (v) parts.push(v);
+							if (v) {
+								pills.push(v);
+								seen.add(key);
+							}
 						}
-						for (const [k, v] of Array.from(statuses.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
-							if (!v) continue;
-							if (priority.includes(k) || k === "status-line") continue;
-							parts.push(v);
+						for (const [k, v] of Array.from(statuses.entries()).sort((a, b) =>
+							a[0].localeCompare(b[0]),
+						)) {
+							if (!v || seen.has(k) || k === "status-line" || k === "run-state") continue;
+							pills.push(v);
 						}
-						return parts.length ? parts.join(theme.fg("dim", "  ")) : "";
-					})();
-
-					// Row 1: cwd + branch ............................ model · thinking
-					const l1L = theme.fg("text", cwd) + branchStr;
-					const l1R = theme.fg("muted", model) + thinkStr;
-					const l1Pad = " ".repeat(Math.max(1, width - visibleWidth(l1L) - visibleWidth(l1R)));
-					const line1 = truncateToWidth(l1L + l1Pad + l1R, width);
-
-					// Row 2: tokens
-					const tokensParts = [
-						`${theme.fg("dim", "↑")}${theme.fg("text", fmtTokens(input))}`,
-						`${theme.fg("dim", "↓")}${theme.fg("text", fmtTokens(output))}`,
-						`${theme.fg("dim", "cache R")}${theme.fg("text", fmtTokens(cacheRead))}`,
-					];
-					const line2 = truncateToWidth(tokensParts.join("  "), width);
-
-					// Row 3: cost · ctx · statuses
-					const ctxStr =
-						usage && usage.percent !== null && usage.tokens !== null
-							? `ctx ${usage.percent.toFixed(1)}%/${fmtTokens(usage.contextWindow)}`
-							: "ctx —";
-					const costStr = `$${cost.toFixed(3)}`;
-					const line3Parts = [theme.fg("accent", costStr), theme.fg("text", ctxStr)];
-					if (statusText) line3Parts.push(statusText);
-					const line3 = truncateToWidth(line3Parts.join("  ·  "), width);
-
-					return [line1, line2, line3];
+						if (pills.length) {
+							lines.push(truncateToWidth(renderMeta(pills), width));
+						}
+					}
+					return lines;
 				},
 			};
 		});
 	};
 
-	// Register once (Pi will suffix duplicates like /footer:1, /footer:2).
 	pi.registerCommand("footer", {
-		description: "Toggle the 3-row custom footer (default on)",
+		description: "Toggle the powerline footer (default on; PI_FOOTER_ASCII=1 for no Nerd Font)",
 		handler: async (_args, ctx) => {
 			enabled = !enabled;
 			if (!enabled) {
@@ -121,9 +204,8 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("Default footer restored", "info");
 				return;
 			}
-
 			enableFooter(ctx);
-			ctx.ui.notify("Custom footer enabled (/footer to toggle)", "info");
+			ctx.ui.notify("Powerline footer enabled (/footer to toggle)", "info");
 		},
 	});
 

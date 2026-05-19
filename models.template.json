@@ -1,7 +1,18 @@
 {
-  "//": "Copie este arquivo para ~/.pi/agent/models.json e preencha apiKey.",
-  "// openai-codex": "Provider built-in do pi. Autentique via /login (OAuth). Modelos: gpt-5.4, gpt-5.4-mini, etc.",
-  "// opencode-go": "Provider built-in do pi. Já configurado como defaultProvider.",
+  "//": "TEMPLATE. Copie para ~/.pi/agent/models.json e preencha apiKey do provider 'kilo'. Os demais providers são built-in do pi (autentique via /login).",
+  "// proposito": "Declara os providers/modelos que os subagents do recall-pi referenciam. Mapa subagent -> modelo:",
+  "//   coordinator": "openai-codex/gpt-5.3-codex   (built-in, OAuth via /login)",
+  "//   planner": "opencode-go/deepseek-v4-flash    (built-in)",
+  "//   scout + subagentPolicy.classifier": "kilo/gpt-4.1-mini",
+  "//   executor, worker": "kilo/gpt-5-mini",
+  "//   debugger": "kilo/qwen/qwen3.6-plus",
+  "//   reviewer": "kilo/deepseek/deepseek-v4-flash",
+  "//   compaction (global / projeto)": "openai-codex/gpt-5.2  /  opencode-go/deepseek-v4-pro",
+  "//   default (agente principal, nao subagent)": "anthropic/claude-opus-4-5  (built-in, OAuth via /login)",
+  "// anthropic": "Built-in. Autentique via /login (OAuth). Nao precisa de entrada aqui.",
+  "// openai-codex": "Built-in. Autentique via /login (OAuth). Modelos usados pelo recall-pi: gpt-5.3-codex (coordinator), gpt-5.2 (compaction global).",
+  "// opencode-go": "Built-in. Modelos usados pelo recall-pi: deepseek-v4-flash (planner), deepseek-v4-pro (compaction de projeto). NAO e o defaultProvider (o default e anthropic/claude-opus-4-5).",
+  "// kilo": "Unico provider que exige config real (baseUrl + apiKey). Preencha apiKey antes de usar. gpt-5-mini omite 'compat' de proposito (familia GPT-5 suporta developer role e reasoning effort; os demais via kilo nao).",
   "providers": {
     "kilo": {
       "baseUrl": "https://api.kilo.ai/api/gateway",

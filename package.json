@@ -7,7 +7,7 @@
     "test": "node --test --experimental-transform-types .pi/extensions/test/subagent-env.test.ts",
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -p tsconfig.json",
-    "setup-pi-settings": ".pi/scripts/setup-pi-settings.sh"
+    "setup-pi-settings": "scripts/setup-pi-settings.sh"
   },
   "description": "<div align=\"center\">",
   "main": "index.js",
@@ -31,6 +31,9 @@
     ],
     "prompts": [
       "./.pi/prompts"
+    ],
+    "themes": [
+      "./.pi/themes"
     ]
   },
   "peerDependencies": {

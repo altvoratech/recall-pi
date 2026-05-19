@@ -1,11 +1,10 @@
 {
-  "systemRules": {
-    "path": "../GLOBAL_RULES.md"
-  },
   "compaction": {
     "thresholdTokens": 100000,
     "summarizerProvider": "opencode-go",
     "summarizerModel": "deepseek-v4-pro"
   },
-  "skills": [".agents/skills/find-skills"]
+  "packages": [
+    ".."
+  ]
 }

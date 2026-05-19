@@ -13,11 +13,44 @@ export type AgentSource = "extension" | "user" | "project";
 export interface AgentConfig {
 	name: string;
 	description: string;
+	role?: string;
 	tools?: string[];
 	model?: string;
 	systemPrompt: string;
 	source: AgentSource;
 	filePath: string;
+}
+
+// Capability ceiling por NOME de agent (nomes de built-in do Pi:
+// read,bash,edit,write,grep,find,ls). O `tools:` do .md só pode
+// ESTREITAR dentro do teto, nunca exceder. Agent desconhecido (ex:
+// project-local repo-controlled) cai no teto read-only seguro — não
+// pode se auto-conceder write/edit/bash via frontmatter.
+const READONLY_SAFE = ["read", "grep", "find", "ls"] as const;
+
+const NAME_CEILING: Record<string, readonly string[]> = {
+	coordinator: ["read", "grep", "find", "ls"],
+	scout: ["read", "bash", "grep", "find", "ls"],
+	planner: ["read", "bash", "grep", "find", "ls"],
+	reviewer: ["read", "bash", "grep", "find", "ls"],
+	debugger: ["read", "bash", "grep", "find", "ls"],
+	worker: ["read", "write", "edit", "bash", "grep", "find", "ls"],
+	executor: ["read", "write", "edit", "bash", "grep", "find", "ls"],
+};
+
+/**
+ * Tools efetivas = interseção entre o que o .md declara e o teto da
+ * capability (chaveado por nome). Sempre retorna lista NÃO vazia: um
+ * agent sem tools válidas roda no seu teto seguro, nunca no toolset
+ * default completo do Pi. Esse resultado vai pro `--tools` do
+ * subprocess, que — com `--no-extensions` — é a fronteira de
+ * segurança real do subagente.
+ */
+function resolveTools(name: string, declared: string[] | undefined): string[] {
+	const ceiling = NAME_CEILING[name] ?? READONLY_SAFE;
+	const allowed = new Set<string>(ceiling);
+	const narrowed = (declared ?? []).map((t) => t.toLowerCase()).filter((t) => allowed.has(t));
+	return narrowed.length > 0 ? narrowed : [...ceiling];
 }
 
 const EXTENSION_AGENTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
@@ -63,11 +96,13 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			?.split(",")
 			.map((t: string) => t.trim())
 			.filter(Boolean);
+		const role = frontmatter.role?.trim();
 
 		agents.push({
 			name: frontmatter.name,
 			description: frontmatter.description,
-			tools: tools && tools.length > 0 ? tools : undefined,
+			role,
+			tools: resolveTools(frontmatter.name, tools),
 			model: frontmatter.model,
 			systemPrompt: body,
 			source,

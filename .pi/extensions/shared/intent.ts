@@ -106,6 +106,24 @@ const STRONG_COMPLEX_PHRASES_RAW = [
 	"audit",
 	"review",
 
+	// added Portuguese verbs commonly used for changes/review
+	"verifica",
+	"verificar",
+	"analise",
+	"analisar",
+	"corrige",
+	"corrigir",
+	"modifica",
+	"modificar",
+	"ajusta",
+	"ajustar",
+	"cria",
+	"criar",
+	"implementa",
+	"implementar",
+	"adiciona",
+	"adicionar",
+
 	// risk/bug language
 	"riscos",
 	"ameaças",
@@ -125,7 +143,7 @@ const STRONG_COMPLEX_PHRASES_RAW = [
 // Pre-normalize once (avoid repeated normalizeText per prompt)
 const STRONG_COMPLEX_PHRASES = STRONG_COMPLEX_PHRASES_RAW.map((p) => normalizeText(p)).filter(Boolean);
 
-const COMPLEX_VERB_RE = /(investig|refator|mape|implemen|corrig|fix|debug|otimiz|revis|audit|review|migra|port|hardening|seguranc)/;
+const COMPLEX_VERB_RE = /(investig|refator|mape|implemen|corrig|verific|analis|modific|ajust|adicion|cri|fix|debug|otimiz|revis|audit|review|migra|port|hardening|seguranc)/;
 
 export function looksComplex(text: string): boolean {
 	return lexicalComplexity(text).tier === "auto";
@@ -180,7 +198,7 @@ export function lexicalComplexity(
 	// - auto: high confidence the request benefits from delegation
 	// - inject: default (show policy, but don't auto-route)
 	// - skip: already handled above
-	const tier: ComplexityTier = score >= 4 ? "auto" : "inject";
+	const tier: ComplexityTier = score >= 3 ? "auto" : "inject";
 	return { tier, score, reasons };
 }
 

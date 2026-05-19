@@ -23,6 +23,7 @@ import { type ExtensionAPI, type ExtensionContext, getMarkdownTheme, withFileMut
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
+import { registerSubagentPolicy } from "./policy.ts";
 import { getAbortLockState, onAbortLockChange } from "../shared/abort-lock.ts";
 import { appendSystemLog, getSystemLogPath } from "../shared/system-log.ts";
 
@@ -306,7 +307,13 @@ async function runSingleAgent(
 		};
 	}
 
-	const args: string[] = ["--mode", "json", "-p", "--no-session"];
+	// --no-extensions: o subprocess pi NÃO deve herdar subagent-policy,
+	// recall-tools, custom-compaction, tool-discovery, etc. Sem isso o
+	// subagente recebe [AUTO-DELEGATION ROUTER] injetado e tenta delegar
+	// em loop, além de rodar auto-search/compaction dentro de cada step.
+	// Agents usam só built-ins (allowlistados via --tools), então
+	// desabilitar discovery de extensions é seguro. (Pi docs: usage.md)
+	const args: string[] = ["--mode", "json", "-p", "--no-session", "--no-extensions"];
 	if (agent.model) args.push("--model", agent.model);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
@@ -449,8 +456,14 @@ async function runSingleAgent(
 					emitUpdate();
 				}
 
-				if (event.type === "tool_result_end" && event.message) {
-					currentResult.messages.push(event.message as Message);
+				// JSON event stream não emite "tool_result_end". Resultados de
+				// tool chegam em turn_end.toolResults (ToolResultMessage[]),
+				// conforme docs/coding-agent/json.md. event.message do turn_end
+				// é a mensagem assistant, já capturada via message_end acima.
+				if (event.type === "turn_end" && Array.isArray(event.toolResults)) {
+					for (const trMsg of event.toolResults as Message[]) {
+						currentResult.messages.push(trMsg);
+					}
 					emitUpdate();
 				}
 			};
@@ -566,6 +579,10 @@ const SubagentParams = Type.Object({
 });
 
 export default function (pi: ExtensionAPI) {
+	// Subsistema de subagentes coeso: a tool `subagent` + a policy de
+	// delegação (antes solta em ../subagent-policy.ts) carregam juntas.
+	registerSubagentPolicy(pi);
+
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
