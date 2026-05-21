@@ -85,3 +85,40 @@ export function appendSystemLog(source: string, event: string, payload?: Record<
 export function getSystemLogPath(): string {
 	return LOG_PATH;
 }
+
+// ── Policy feedback (delegation efficiency tracking) ──────────────────
+
+const FEEDBACK_PATH = path.join(REPO_ROOT, ".pi", "harness", "policy-feedback.jsonl");
+const MAX_FEEDBACK_BYTES = 2 * 1024 * 1024; // 2 MB
+
+export function appendPolicyFeedback(
+	event: string,
+	payload?: Record<string, unknown>,
+): void {
+	const line = safeSerialize({
+		ts: new Date().toISOString(),
+		event,
+		...payload,
+	});
+	const rendered = `${line}\n`;
+
+	writeQueue = writeQueue
+		.then(async () => {
+			const dir = path.dirname(FEEDBACK_PATH);
+			await fs.promises.mkdir(dir, { recursive: true }).catch(() => undefined);
+			let currentSize = 0;
+			try { currentSize = (await fs.promises.stat(FEEDBACK_PATH)).size; } catch { /* new file */ }
+			if (currentSize + Buffer.byteLength(rendered, "utf8") > MAX_FEEDBACK_BYTES) {
+				// truncate: rename old → .1, start fresh
+				const backup = `${FEEDBACK_PATH}.1`;
+				try {
+					if ((await fs.promises.stat(backup)).isFile()) await fs.promises.unlink(backup);
+				} catch { /* ok */ }
+				await fs.promises.rename(FEEDBACK_PATH, backup).catch(() => undefined);
+			}
+			await fs.promises.appendFile(FEEDBACK_PATH, rendered, { encoding: "utf8" });
+		})
+		.catch(() => {
+			// never break runtime because of feedback logging
+		});
+}

@@ -70,8 +70,9 @@ recall-pi/
 ├── .pi/
 │   ├── extensions/      # extensões TypeScript do Pi
 │   ├── harness/         # traces gerados em runtime (.pi/harness/runs)
-│   ├── prompts/         # templates /comando
-│   ├── scripts/         # helpers
+│   ├── prompts/         # templates /comando (slash commands do usuário)
+│   ├── skills/          # skills project-local
+│   ├── themes/          # tema TUI (recall-pi.json)
 │   └── settings.json    # settings do projeto
 ├── docs/
 ├── models.template.json # template para ~/.pi/agent/models.json (provider kilo)
@@ -101,15 +102,24 @@ Principais extensões em `.pi/extensions/`:
 - `protected-paths.ts` — confirmação para writes/edits em paths protegidos (`.env`, `node_modules/`, configs do Pi, etc.)
 - `recall-tools/` — integração com recall via MCP local (`recall_mcp_load`, `recall_save`)
 - `jina-index/` — indexação e busca semântica local de docs via Jina API
-- `custom-compaction.ts` — substitui o resumo padrão por summary cumulativo via LLM no hook `session_before_compact`
-- `compaction-snapshot/` — persiste snapshots de compaction no disco no evento `session_compact`
-- `trigger-compact.ts` — expõe `/trigger-compact` para compaction manual
+- `compaction/` — domínio consolidado: `custom.ts` (summary cumulativo via LLM), `snapshot.ts` (snapshot em `session_compact`) e `trigger.ts` (comando manual `/trigger-compact`)
 - `tool-discovery/` — índice BM25 de tools + `search_tool`
 - `command-bridge/` — expõe slash commands de `~/.claude/`, `~/.codex/`, `~/.opencode/`
-- `subagent-env/` + `subagent-policy.ts` — ambiente, execução e roteamento de subagentes
-- `trace-recorder.ts` — tracing por run com spans de tool, artefatos e tokens (+ `/trace-last`, `/trace-list`)
+- `subagent-env/` — runner, discovery e policy de subagentes
+- `trace-recorder/` — tracing por run com spans de tool, artefatos e tokens (+ `/trace-last`, `/trace-list`)
 - `session-digest/` — Fase 1+2 + injeção manual controlada: histórico por sessão, contador operacional desde o último checkpoint no footer e comando `/session-digest` (`refresh`, `status`, `show`, `inject`)
 - `status-line.ts` / `working-indicator.ts` / `custom-footer.ts` — UX da UI
+- `system-rules.ts` — injeta `~/.pi/agent/GLOBAL_RULES.md` como regras do operador no final do system prompt (autoridade máxima, não-sobrescrevível por projetos)
+
+### System rules (operador global)
+
+A extensão `system-rules.ts` carrega `~/.pi/agent/GLOBAL_RULES.md` e injeta no final do system prompt como regras autoritativas do operador. O arquivo é configurável via `settings.json` → `systemRules.path`.
+
+**Status atual:** mecanismo disponível, pendente de implementação e teste. O arquivo `GLOBAL_RULES.md` não existe por padrão — quando criado e populado, todas as sessões do Pi que carregarem este pack herdarão as regras.
+
+**Precedência:** project `.pi/settings.json` → global `~/.pi/agent/settings.json` → default `~/.pi/agent/GLOBAL_RULES.md`.
+
+**Cuidado:** `system-rules.ts` e `subagent-env/policy.ts` usam o mesmo hook `before_agent_start`. Regras conflitantes entre GLOBAL_RULES e a subagent-policy precisam ser coordenadas.
 
 ## Skills
 
@@ -169,7 +179,6 @@ Subagentes bundled:
 - `coordinator` → `openai-codex/gpt-5.3-codex`
 - `scout` → `kilo/gpt-4.1-mini`
 - `planner` → `opencode-go/deepseek-v4-flash`
-- `worker` → `kilo/gpt-5-mini`
 - `executor` → `kilo/gpt-5-mini`
 - `reviewer` → `kilo/deepseek/deepseek-v4-flash`
 - `debugger` → `kilo/qwen/qwen3.6-plus`
@@ -229,6 +238,15 @@ npm run typecheck
 npm test
 ```
 
+## TypeScript rigor roadmap
+
+Migração sugerida para elevar segurança de tipos sem travar evolução:
+
+1. Ativar `noImplicitOverride` e `noUncheckedIndexedAccess` primeiro.
+2. Corrigir alertas por domínio (`subagent-env`, `session-digest`, `trace-recorder`).
+3. Ativar `strictNullChecks`.
+4. Ativar `strict` por último, mantendo `skipLibCheck: true`.
+
 Cobertura atual de testes inclui:
 - heurística léxica de subagentes
 - registro de tools/extensions
@@ -254,6 +272,35 @@ Uso:
 
 - `/provider-doctor` — mostra status do provider/model atual e faz probes best-effort
 
+## MCP nativo (status atual)
+
+O `mcp-tools` está implementado até a **Fase 4**:
+- Fase 0: JSON-RPC HTTP mínimo
+- Fase 1: cliente simplificado (`connect/list/call/disconnect`)
+- Fase 2: transporte `stdio`
+- Fase 3: bridge dinâmica MCP → tools do Pi (`mcp_<server>__<tool>`)
+- Fase 4: auto-discovery de `.mcp.json`
+
+Comandos principais:
+- `/mcp-connect [server]`
+- `/mcp-tools-list [server]`
+- `/mcp-sync-tools [server|all]`
+- `/mcp-status`
+- `/mcp-disconnect`
+
+Tools de bridge:
+- `mcp_list_tools`
+- `mcp_call_tool`
+
+Precedência de configuração de servers MCP:
+1. `settings.mcp.servers`
+2. `.mcp.json` (`mcpServers`)
+3. fallback legado via `recall.url` (somente quando `mcp.servers` está vazio)
+
+Observação importante:
+- o `recall-core` neste setup atual expõe MCP via **SSE** (`.../sse`).
+- portanto, o fluxo de recall segue em `recall-tools` (`recall_mcp_load` / `recall_save`) até suporte SSE nativo no `mcp-tools` (Fase 6).
+
 ## Models & providers
 
 ### Kilo (custom — requer `models.json`)
@@ -265,7 +312,7 @@ Modelos registrados:
 | id | usado por |
 |---|---|
 | `gpt-4.1-mini` | scout |
-| `gpt-5-mini` | worker, executor |
+| `gpt-5-mini` | executor |
 | `deepseek/deepseek-v4-flash` | reviewer |
 | `qwen/qwen3.6-plus` | debugger |
 
@@ -301,6 +348,8 @@ Modelos registrados:
 - timeout de subagente + `/abort`
 - permission gate + protected paths
 - integração recall via MCP local
+- mcp-tools nativo fase 0/1/2/3 entregue (HTTP JSON-RPC + stdio + bridge dinâmica)
+- observação: recall-core atual expõe MCP via SSE; uso de recall permanece em `recall-tools` até suporte SSE nativo no `mcp-tools`
 
 ### V2 — integração mais profunda com recall-core
 - chamadas diretas a módulos do core

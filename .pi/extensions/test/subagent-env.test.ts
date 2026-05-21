@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import statusLineExt from "../status-line.ts";
 import sessionDigestExt, { createSessionDigestExtension } from "../session-digest/index.ts";
 import { registerSubagentPolicy } from "../subagent-env/policy.ts";
+import { classifyAction, validateToolCall } from "../subagent-env/policy-engine.ts";
 import recallToolsExt from "../recall-tools/index.ts";
 import subagentExt from "../subagent-env/index.ts";
 import workingIndicatorExt from "../working-indicator.ts";
@@ -53,7 +54,7 @@ const EXT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const AGENT_MODEL_EXPECTATIONS = [
 	["scout", "model: kilo/gpt-4.1-mini"],
 	["planner", "model: opencode-go/deepseek-v4-flash"],
-	["worker", "model: kilo/gpt-5-mini"],
+	["executor", "model: kilo/gpt-5-mini"],
 	["reviewer", "model: kilo/deepseek/deepseek-v4-flash"],
 ] as const;
 
@@ -413,7 +414,7 @@ test("subagent policy auto-delegates when lexical heuristic returns 'auto'", asy
 	assert.equal(response?.action, "transform");
 	assert.match(String(response?.text ?? ""), /\[AUTO-DELEGATION ROUTER\]/);
 	assert.match(String(response?.text ?? ""), /scout/);
-	assert.match(String(response?.text ?? ""), /worker/);
+	assert.match(String(response?.text ?? ""), /executor/);
 });
 
 test("subagent policy injects guidance when lexical heuristic returns 'inject'", async () => {
@@ -445,6 +446,55 @@ test("subagent policy skips when lexical heuristic returns 'skip'", async () => 
 		mockClassifierCtx({ hasUI: false }),
 	);
 	assert.equal(beforeResp, undefined);
+});
+
+test("deterministic policy classifies and allows read-only actions", async () => {
+	assert.equal(classifyAction("read", { file_path: "README.md" }), "read");
+	assert.equal(classifyAction("bash", { command: "git status" }), "read");
+	assert.equal(
+		validateToolCall({
+			sessionMode: "strict",
+			sessionRole: "main",
+			toolName: "read",
+			toolInput: { file_path: "README.md" },
+		}).allow,
+		true,
+	);
+});
+
+test("deterministic policy blocks main mutating tools in strict mode", async () => {
+	const result = validateToolCall({
+		sessionMode: "strict",
+		sessionRole: "main",
+		toolName: "write",
+		toolInput: { file_path: "x.ts", content: "x" },
+	});
+	assert.equal(result.allow, false);
+	assert.equal(result.actionClass, "mutating");
+	assert.equal(result.escalateToStrict, true);
+});
+
+test("deterministic policy blocks destructive bash in balanced mode", async () => {
+	const result = validateToolCall({
+		sessionMode: "balanced",
+		sessionRole: "main",
+		toolName: "bash",
+		toolInput: { command: "rm -rf /tmp/demo" },
+	});
+	assert.equal(result.allow, false);
+	assert.equal(result.actionClass, "destructive");
+	assert.equal(result.escalateToStrict, true);
+});
+
+test("deterministic policy allows main mutating bash in balanced mode", async () => {
+	const result = validateToolCall({
+		sessionMode: "balanced",
+		sessionRole: "main",
+		toolName: "bash",
+		toolInput: { command: "git commit -m 'msg'" },
+	});
+	assert.equal(result.allow, true);
+	assert.equal(result.actionClass, "mutating");
 });
 
 // Legacy live test — LLM classifier removed. Kept as smoke test for lexical tier.
@@ -567,7 +617,7 @@ console.log(JSON.stringify({
 		subagentExt({ registerTool: (t) => (tool = t), registerCommand: () => {}, on: () => {} } as any);
 		assert.ok(tool, "subagent tool was not registered");
 
-		for (const agent of ["debugger", "planner", "reviewer", "scout", "worker"]) {
+		for (const agent of ["debugger", "planner", "reviewer", "scout", "executor"]) {
 			const result = await tool.execute(
 				"test",
 				{ agent, task: `smoke ${agent}` },

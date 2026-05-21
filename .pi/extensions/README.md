@@ -7,6 +7,7 @@ Coleção de extensões do Pi usadas por `recall-pi`.
 - `permission-gate.ts` — modal para bash sensível/privilegiado; bloqueio de `write`/`edit` em `.recall` e `.git/`; comando `/abort`
 - `protected-paths.ts` — confirmação para alterações em paths sensíveis (`.env`, `node_modules/`, configs do Pi)
 - `recall-tools/` — tools `recall_mcp_load` e `recall_save`
+- `mcp-tools/` — fase 0/1/2/3/4 do MCP nativo (JSON-RPC HTTP + stdio + bridge dinâmico + auto-discovery `.mcp.json`): `/mcp-connect`, `/mcp-tools-list`, `/mcp-sync-tools`, `mcp_list_tools`, `mcp_call_tool`
 - `jina-index/` — indexação/busca local de docs
 - `compaction/` — domínio consolidado: `custom.ts` (summary cumulativo via LLM em `session_before_compact`), `snapshot.ts` (persiste snapshot em `session_compact`), `trigger.ts` (comando manual `/trigger-compact`)
 - `tool-discovery/` — `search_tool` + ativação on-demand sem inflar o system prompt
@@ -15,7 +16,7 @@ Coleção de extensões do Pi usadas por `recall-pi`.
 - `trace-recorder/` — tracing de runs em `.pi/harness/runs/` (`index.ts` + `paths.ts`/`helpers.ts`/`writer.ts`/`types.ts`)
 - `session-digest/` — observabilidade por turns + digest manual + injeção controlada; histórico por sessão, contador operacional desde o último checkpoint, status persistente e comando `/session-digest`
 - `status-line.ts`, `working-indicator.ts`, `custom-footer.ts` — UX da TUI
-- `system-rules.ts` — injeta `GLOBAL_RULES.md`
+- `system-rules.ts` — injeta `~/.pi/agent/GLOBAL_RULES.md` como regras do operador no final do system prompt. **Status:** mecanismo disponível, pendente de implementação e teste. O arquivo `GLOBAL_RULES.md` não existe por padrão.
 
 ## Convenção: diretório vs arquivo solto
 
@@ -42,6 +43,14 @@ Soltas mantidas de propósito (single-concern, não viram diretório):
 A integração de recall usa MCP local e lê configuração de settings/env vars.
 A identidade do projeto continua vindo de `.recall/project.json`.
 
+### Status atual do MCP nativo
+
+- `mcp-tools` cobre transports `http` (JSON-RPC POST) e `stdio`.
+- `mcp-tools` já registra bridge dinâmica de tools (`mcp_<server>__<tool>`), com sync manual (`/mcp-sync-tools`) e opcional via `mcp.autoRegister`.
+- `mcp-tools` faz merge de servidores nesta ordem: `settings.mcp.servers` (precedência maior) + `.mcp.json` (`mcpServers`) + fallback legado de `recall.url` quando não há `mcp.servers`.
+- `recall-core` neste setup usa endpoint MCP via SSE (`.../sse`), portanto continua atendido por `recall-tools` (wrapper Python) neste momento.
+- Resultado prático: para recall use `recall_mcp_load`/`recall_save`; para servers MCP HTTP/stdio use `mcp-tools`.
+
 ## Skills
 
 As skills do projeto são declaradas no `package.json` via:
@@ -57,9 +66,10 @@ Use `/reload` após adicionar ou mover skills.
 ## Subagents
 
 Modelos atuais:
+- `coordinator` → `openai-codex/gpt-5.3-codex`
 - `scout` → `kilo/gpt-4.1-mini`
-- `planner` → `openai-codex/gpt-5.4`
-- `worker` → `kilo/gpt-5-mini`
+- `planner` → `opencode-go/deepseek-v4-flash`
+- `executor` → `kilo/gpt-5-mini`
 - `reviewer` → `kilo/deepseek/deepseek-v4-flash`
 - `debugger` → `kilo/qwen/qwen3.6-plus`
 
@@ -75,7 +85,7 @@ Comportamento relevante:
 A `policy.ts` implementa heurística léxica de delegação automática:
 
 - **Tiers**: `skip` (small talk), `inject` (injeta policy no system prompt), `auto` (força delegação + bloqueia mutações)
-- **Bloqueio**: quando tier=auto, `write`/`edit`/bash mutativo são bloqueados no main — só o worker pode executar
+- **Bloqueio**: quando tier=auto, `write`/`edit`/bash mutativo são bloqueados no main — só o executor pode executar
 - **Default**: ON (policy ativa)
 - **Toggle**: `/subagent-policy off` desliga para a sessão atual, `/subagent-policy on` religa
 - **Status no footer**: `pol:on` ou `pol:off`

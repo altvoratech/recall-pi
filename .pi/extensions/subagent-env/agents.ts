@@ -29,13 +29,19 @@ export interface AgentConfig {
 const READONLY_SAFE = ["read", "grep", "find", "ls"] as const;
 
 const NAME_CEILING: Record<string, readonly string[]> = {
-	coordinator: ["read", "grep", "find", "ls"],
+	// Core pipeline
 	scout: ["read", "bash", "grep", "find", "ls"],
 	planner: ["read", "bash", "grep", "find", "ls"],
-	reviewer: ["read", "bash", "grep", "find", "ls"],
-	debugger: ["read", "bash", "grep", "find", "ls"],
-	worker: ["read", "write", "edit", "bash", "grep", "find", "ls"],
 	executor: ["read", "write", "edit", "bash", "grep", "find", "ls"],
+	debugger: ["read", "bash", "grep", "find", "ls"],
+	reviewer: ["read", "bash", "grep", "find", "ls"],
+	// Specialists (FUTURE IMPLEMENTATION)
+	"security-reviewer": ["read", "bash", "grep", "find", "ls"],
+	"test-engineer": ["read", "write", "edit", "bash", "grep", "find", "ls"],
+	"git-master": ["read", "bash", "grep", "find", "ls"],
+	"code-simplifier": ["read", "write", "edit", "bash", "grep", "find", "ls"],
+	critic: ["read", "bash", "grep", "find", "ls"],
+	architect: ["read", "bash", "grep", "find", "ls"],
 };
 
 /**

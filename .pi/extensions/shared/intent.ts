@@ -206,4 +206,50 @@ export function lexicalComplexityTier(prompt: string): ComplexityTier {
 	return lexicalComplexity(prompt).tier;
 }
 
+// ─── Topic shift detection (session memory for delegation policy) ───────
 
+const INTENT_WORD_RE = /(?:^|\s)(analis|refator|mape|implemen|corrig|verific|modific|ajust|adicion|cri|fix|debug|otimiz|revis|audit|review|migra|port|hardening|seguranc|test|deploy|build|config|setup|install|migra|doc|document|lint|format|style|clean|remove|delete|extrai|extrair|extra|renomea|renomear|rename|move|split|merge|unifica|unificar|unify|extrair|atualiz|updat|bump|rollback|revert)/gi;
+
+/**
+ * Extrai palavras de intenção de um prompt para comparação entre turnos.
+ * Foca em verbos de ação + substantivos de domínio (2+ chars).
+ */
+export function extractIntentWords(text: string): Set<string> {
+	const words = new Set<string>();
+	const raw = String(text ?? "");
+
+	// Verbos de ação reconhecidos
+	for (const m of raw.matchAll(INTENT_WORD_RE)) {
+		words.add(m[1].toLowerCase());
+	}
+
+	// Substantivos com 4+ chars (filtra ruído)
+	const nouns = raw.toLowerCase().match(/[a-záàâãéêíóôõúç]{4,}/g);
+	if (nouns) {
+		for (const n of nouns) {
+			// Pula stop words comuns
+			if (/^(para|como|isso|esse|essa|aqui|mais|muito|todos|cada|pelo|pela|entre|sobre|porque|quando|onde)$/.test(n)) continue;
+			words.add(n);
+		}
+	}
+
+	return words;
+}
+
+/**
+ * Detecta mudança de assunto entre dois prompts.
+ * Retorna true se o overlap de palavras de intenção for baixo (< 30%).
+ */
+export function isTopicShift(current: string, previous: string): boolean {
+	const cur = extractIntentWords(current);
+	const prev = extractIntentWords(previous);
+	if (cur.size === 0 || prev.size === 0) return true;
+
+	let overlap = 0;
+	for (const w of cur) {
+		if (prev.has(w)) overlap++;
+	}
+
+	const ratio = overlap / Math.max(cur.size, 1);
+	return ratio < 0.3;
+}

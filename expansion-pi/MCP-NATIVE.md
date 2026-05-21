@@ -21,6 +21,21 @@ O recall-pi pode portar componentes estratégicos dessa implementação, ganhand
 
 ---
 
+## Status de implementação (2026-05-20)
+
+- Fase 0: concluída (cliente JSON-RPC HTTP mínimo).
+- Fase 1: concluída (cliente simplificado connect/list/call/disconnect).
+- Fase 2: concluída (transporte stdio com subprocess persistente).
+- Fase 3: concluída (extensão `mcp-tools` com bridge dinâmica e sync).
+- Fase 4: concluída (auto-discovery de `.mcp.json` com merge em runtime).
+- Fase 5: pendente.
+- Fase 6 (SSE/resources/prompts): pendente.
+
+Nota operacional importante:
+- o `recall-core` deste setup responde MCP via SSE (`.../sse`), então o fluxo de recall segue em `recall-tools` até a fase de SSE nativo no `mcp-tools`.
+
+---
+
 ## Fonte de Referência
 
 Diretório analisado:
