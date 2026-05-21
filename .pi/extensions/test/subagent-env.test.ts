@@ -14,7 +14,6 @@ import recallToolsExt from "../recall-tools/index.ts";
 import subagentExt from "../subagent-env/index.ts";
 import workingIndicatorExt from "../working-indicator.ts";
 import jinaIndexExt from "../jina-index/index.ts";
-import { buildIndex, search } from "../tool-discovery/bm25.ts";
 
 const fakeTheme = {
 	fg: (_color: string, text: string) => text,
@@ -726,39 +725,4 @@ Respond with exactly: pong
 		else process.env.PI_SUBAGENT_BIN = previous;
 		await fs.rm(tmpDir, { recursive: true, force: true });
 	}
-});
-
-test("bm25 ranks ast tools above unrelated tools for ast query", () => {
-	const docs = [
-		{ name: "ast_grep", description: "Search code via tree-sitter ast patterns; structural match by syntax" },
-		{ name: "ast_edit", description: "Apply ast-based structural edits to TypeScript and JavaScript code" },
-		{ name: "fetch", description: "Fetch a URL and return body as text" },
-		{ name: "calculator", description: "Evaluate arithmetic expressions" },
-		{ name: "read", description: "Read a file from the local filesystem" },
-	];
-	const index = buildIndex(docs, (d) => `${d.name} ${d.description}`);
-	const hits = search(index, "ast refactor structural", { limit: 3 });
-
-	assert.ok(hits.length >= 2, `expected at least 2 hits, got ${hits.length}`);
-	assert.ok(
-		["ast_grep", "ast_edit"].includes(hits[0]!.doc.name),
-		`top hit should be an ast tool, got ${hits[0]!.doc.name}`,
-	);
-	assert.ok(hits[0]!.score > 0, "score should be positive");
-});
-
-test("bm25 returns empty for unrelated query", () => {
-	const docs = [
-		{ name: "read", description: "Read a file from the local filesystem" },
-		{ name: "bash", description: "Run shell command" },
-	];
-	const index = buildIndex(docs, (d) => `${d.name} ${d.description}`);
-	const hits = search(index, "matplotlib pyplot chart");
-	assert.equal(hits.length, 0, "should return no hits when nothing matches");
-});
-
-test("bm25 handles empty index without crashing", () => {
-	const index = buildIndex<{ name: string }>([], (d) => d.name);
-	const hits = search(index, "anything");
-	assert.equal(hits.length, 0);
 });

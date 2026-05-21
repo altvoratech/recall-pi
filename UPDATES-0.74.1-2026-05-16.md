@@ -216,3 +216,120 @@ tirar de `.pi/` o que não é recurso Pi.
 - Tools de subagente bounded por capability ceiling por nome (interseção; default read-only seguro para agents desconhecidos).
 - Extensions reorganizadas por coesão: `subagent-env/` (tool+policy), `trace-recorder/` (split), `compaction/` (domínio). Convenção dir-vs-flat documentada; Tier 3/4 permanecem flat.
 - Layout do pacote alinhado: todo recurso runtime sob `.pi/` (`themes/` → `.pi/themes/`); tooling de projeto fora de `.pi/` (`scripts/` na raiz).
+
+---
+
+## 2026-05-20/21 — Subagent policy loop fix, agent roster overhaul, skill catalog
+
+Sessão de revisão profunda do recall-pi com foco em eliminar loops de delegação,
+refinar o roster de agentes e integrar skills ao fluxo de trabalho.
+
+### 1) State machine anti-loop na subagent policy
+
+- **Problema:** o classificador léxico (`shared/intent.ts`) classificava praticamente
+  todo prompt em português como tier `auto` (verbos como "analise", "cria",
+  "implementa" disparam score >= 3). Sem cooldown, cada turno do usuário
+  re-armava o lockdown, forçando delegação infinita.
+- **Fix:** state machine de sessão em `policy.ts`:
+  - `IDLE` → tier léxico decide livremente
+  - `AUTO_ONCE` → lockdown ativo (primeira vez na sessão)
+  - `POLICY_ONLY` → estado estável, política injetada mas agente decide
+  - Transição: subagent chamado → POLICY_ONLY; topic shift → IDLE
+- **Topic shift detector:** `isTopicShift()` em `shared/intent.ts` — compara overlap
+  de palavras de intenção entre prompts; < 30% overlap → reset.
+- **Feedback tracker:** `appendPolicyFeedback()` em `shared/system-log.ts` — grava
+  eventos de eficácia (auto_triggered, delegation_executed, user_bypassed,
+  auto_downgraded, state_transition, topic_shift_reset) em
+  `.pi/harness/policy-feedback.jsonl`.
+
+### 2) Policy texts — eliminado "Default flow" mandatório
+
+- **Problema:** os textos `[AUTO-DELEGATION ROUTER]`, `[AUTO-DELEGATION LOCKDOWN]`
+  e `[SUBAGENT POLICY]` continham "Default flow: scout → planner → executor →
+  reviewer" — o LLM interpretava como cadeia obrigatória, encadeando todos os
+  subagentes mesmo para tarefas simples.
+- **Fix:** substituído por "Pick the subagent that best fits the request. One is
+  usually enough." + "Do NOT chain all subagents just because they exist."
+
+### 3) Coordinator removido
+
+- `coordinator.md` deletado. Função (triage + plano + handoff read-only) já é
+  coberta pelo main agent + scout + planner. Era um hop extra desnecessário:
+  main → coordinator → (plano) → main → executor.
+- `NAME_CEILING` limpo em `agents.ts`.
+
+### 4) Executor refatorado — só implementa, não valida
+
+- **Antes:** "Implements... and validates the result" — conflito de interesses.
+- **Agora:** "Does NOT validate — debugger and reviewer handle that."
+- Removeu seção `## Validation` do output. Constraints novas: "You validate
+  FUNCTIONALLY only (build, tests, lint). The reviewer handles code quality."
+
+### 5) Debugger expandido — modo verificação + bug hunting
+
+- **Modo A (Post-Execution Verification):** roda build + testes, reporta pass/fail.
+  Assume o papel de validação funcional que o executor fazia.
+- **Modo B (Bug Hunting):** root cause analysis (já existia, revisado).
+- Cross-boundary rules: "does NOT do planning, does NOT do quality review."
+
+### 6) Planner e Reviewer — fronteiras esclarecidas
+
+- **Planner:** adicionado "does NOT debug or investigate bugs."
+- **Reviewer:** description e body explicitam "Does NOT validate functionally
+  (executor already did). Your job is QUALITY." + constraint "Do NOT re-run
+  build/tests."
+
+### 7) 6 novos agentes portados do oh-my-claudecode
+
+Portados do diretório `~/Documentos/projects-espelho/oh-my-claudecode/agents/`,
+adaptados do formato XML para o frontmatter markdown do Pi:
+
+| Agente | Tools | Papel | Modelo |
+|---|---|---|---|
+| `security-reviewer` | read, bash, grep, find | OWASP, secrets scan, CVE audit | FUTURE IMPLEMENTATION |
+| `test-engineer` | read, write, edit, bash | TDD, coverage, flaky test hardening | FUTURE IMPLEMENTATION |
+| `git-master` | read, bash, grep, find | Atomic commits, style detection | FUTURE IMPLEMENTATION |
+| `code-simplifier` | read, write, edit, bash | Cleanup pós-implementação | FUTURE IMPLEMENTATION |
+| `critic` | read, bash, grep, find | Deep review multi-perspectiva | `opencode-go/deepseek-v4-pro` |
+| `architect` | read, bash, grep, find | Análise arquitetural estrutural | FUTURE IMPLEMENTATION |
+
+- **Critic** é USER-ONLY — constraint explícita "Do NOT invoke unless user
+  explicitly requests." Prompt `/critic` dedicado. Modelo definido
+  (`deepseek-v4-pro`) por ser ferramenta de arbitragem pessoal.
+- **Demais 5 agentes** com `model: FUTURE IMPLEMENTATION` — decisão de modelo
+  pendente.
+- Todos adicionados ao `NAME_CEILING` em `agents.ts` com comentário separando
+  `// Core pipeline` de `// Specialists`.
+
+### 8) Prompts reescritos para novo roster
+
+- `/scout-and-plan` — scout → planner (análise só, sem implementar)
+- `/implement` — scout → planner → executor → debugger (implementação + verificação)
+- `/implement-and-review` — scout → planner → executor → debugger → reviewer (completo)
+- `/critic` — novo, invoca o critic agent para deep review
+- Todas as referências a `worker` (agente removido) substituídas por `executor`.
+- Debugger adicionado nos fluxos de implementação.
+
+### 9) Skills catalog injetado na política
+
+- Adicionado bloco "Available project skills" nos 3 textos da política
+  (`delegationPolicy`, `autoDelegationPrefix`, `autoBlockPolicy`):
+  - `$semantic-compression` — comprimir contexto para subagentes
+  - `$system-prompts` — melhores práticas de prompt engineering
+- Objetivo: main agent usa skills para preparar contexto antes de delegar.
+
+### 10) Limpeza e documentação
+
+- **`disabled-extensions/`** removido — `antiloop-guard` descontinuado.
+- **`system-rules.ts`** documentado em README.md e extensions/README.md como
+  "mecanismo disponível, pendente de implementação e teste".
+- **README.md** atualizado: estrutura reflete estado atual (sem
+  disabled-extensions, com .pi/themes, .pi/skills, .pi/prompts).
+- Seção "Extensões inativas" removida.
+- Nova seção "System rules (operador global)" com precedência e cuidado sobre
+  conflito com subagent-policy.
+
+### Validação
+
+- `npm run typecheck`: verde.
+- `npm test`: 22 pass, 0 fail, 2 skip.

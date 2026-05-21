@@ -10,7 +10,6 @@ Coleção de extensões do Pi usadas por `recall-pi`.
 - `mcp-tools/` — fase 0/1/2/3/4 do MCP nativo (JSON-RPC HTTP + stdio + bridge dinâmico + auto-discovery `.mcp.json`): `/mcp-connect`, `/mcp-tools-list`, `/mcp-sync-tools`, `mcp_list_tools`, `mcp_call_tool`
 - `jina-index/` — indexação/busca local de docs
 - `compaction/` — domínio consolidado: `custom.ts` (summary cumulativo via LLM em `session_before_compact`), `snapshot.ts` (persiste snapshot em `session_compact`), `trigger.ts` (comando manual `/trigger-compact`)
-- `tool-discovery/` — `search_tool` + ativação on-demand sem inflar o system prompt
 - `command-bridge/` — expõe slash commands externos no Pi
 - `subagent-env/` — subsistema de subagentes: runner/timeout/HUD (`index.ts`), `policy.ts` (heurística léxica de delegação, antes solta), agents em `subagent-env/agents/*.md`
 - `trace-recorder/` — tracing de runs em `.pi/harness/runs/` (`index.ts` + `paths.ts`/`helpers.ts`/`writer.ts`/`types.ts`)

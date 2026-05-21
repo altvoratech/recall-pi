@@ -17,7 +17,7 @@ export interface ValidationResult {
 	escalateToStrict?: boolean;
 }
 
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "search_tool", "recall_mcp_load"]);
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "recall_mcp_load"]);
 const MUTATING_TOOLS = new Set(["write", "edit"]);
 
 const DESTRUCTIVE_BASH = [

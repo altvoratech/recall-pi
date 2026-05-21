@@ -185,6 +185,10 @@ function delegationPolicy(agents: AgentConfig[]): string {
 		"Available subagents (discovered now from ~/.pi/agent/agents and bundled):",
 		roster,
 		"",
+		"Available project skills (use $skill_name before delegating):",
+		"- $semantic-compression — compress context to reduce tokens for subagent tasks",
+		"- $system-prompts — apply prompt engineering best practices when crafting subagent prompts",
+		"",
 		"Delegation guidelines:",
 		"- Pick the subagent that best fits the request. One is often sufficient.",
 		"- scout: reconnaissance/analysis. planner: design/architecture. executor: implementation. reviewer: verification.",
@@ -202,6 +206,10 @@ function autoDelegationPrefix(prompt: string, agents: AgentConfig[]): string {
 	return [
 		"[AUTO-DELEGATION ROUTER]",
 		`This request is complex. You MUST delegate to subagents. Available: ${names}.`,
+		"",
+		"Available project skills (use $skill_name to prepare before delegating):",
+		"- $semantic-compression — compress context to reduce tokens for subagent tasks",
+		"- $system-prompts — apply prompt engineering best practices when crafting subagent prompts",
 		"",
 		"RULES (non-negotiable):",
 		"- You are FORBIDDEN from handling this request directly.",
@@ -230,6 +238,10 @@ function autoBlockPolicy(agents: AgentConfig[]): string {
 		"",
 		"Available subagents:",
 		roster,
+		"",
+		"Available project skills (use $skill_name to prepare context before delegating):",
+		"- $semantic-compression — compress context to reduce tokens for subagent tasks",
+		"- $system-prompts — apply prompt engineering best practices when crafting subagent prompts",
 		"",
 		"Pick the subagent that best fits the request. One is usually enough.",
 		"Typical roles: scout=analysis, planner=design, executor=implementation, reviewer=verification.",
@@ -460,7 +472,7 @@ export function registerSubagentPolicy(pi: ExtensionAPI) {
 			return undefined;
 		}
 		if (toolName === "read" || toolName === "grep" || toolName === "find" ||
-			toolName === "ls" || toolName === "search_tool" || toolName === "recall_mcp_load") {
+			toolName === "ls" || toolName === "recall_mcp_load") {
 			return undefined;
 		}
 

@@ -103,7 +103,6 @@ Principais extensões em `.pi/extensions/`:
 - `recall-tools/` — integração com recall via MCP local (`recall_mcp_load`, `recall_save`)
 - `jina-index/` — indexação e busca semântica local de docs via Jina API
 - `compaction/` — domínio consolidado: `custom.ts` (summary cumulativo via LLM), `snapshot.ts` (snapshot em `session_compact`) e `trigger.ts` (comando manual `/trigger-compact`)
-- `tool-discovery/` — índice BM25 de tools + `search_tool`
 - `command-bridge/` — expõe slash commands de `~/.claude/`, `~/.codex/`, `~/.opencode/`
 - `subagent-env/` — runner, discovery e policy de subagentes
 - `trace-recorder/` — tracing por run com spans de tool, artefatos e tokens (+ `/trace-last`, `/trace-list`)
@@ -252,7 +251,6 @@ Cobertura atual de testes inclui:
 - registro de tools/extensions
 - smoke test dos subagentes bundled via runner fake
 - execução de agente project-local
-- BM25 do `tool-discovery`
 
 ## Image generation (Pi 0.74.1+)
 
